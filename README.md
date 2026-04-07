@@ -25,12 +25,12 @@ python preprocess_3stage_portable.py
 阶段	核心操作	输出文件（保存至 rag_preprocess_output/）	耗时说明
 阶段 1	加载 3 个数据集（HotpotQA/PubMedQA/FinanceBench）→ 脏数据清洗 → Token 级分块（512 Token + 10% 重叠）	stage1_chunks.pkl（分块文本）、stage1_metadata.json（元数据）	较快（1~5 分钟）
 阶段 2	加载分块文本 → 生成 Contriever 768 维稠密向量 → 归一化处理	stage2_embeddings.npy（向量文件）	最长（GPU：10~30 分钟；CPU：10~15 小时）
-阶段 3	加载向量 / 分块 / 元数据 → 构建 BM25 稀疏索引 + Contriever 稠密索引 → 生成最终交付文件	保存至 indexes_optimized_final/（3 个索引文件）	较快（1~3 分钟）
+阶段 3	加载向量 / 分块 / 元数据 → 构建 BM25 稀疏索引 + Contriever 稠密索引 → 生成最终交付文件	保存至 indexes/（3 个索引文件）	较快（1~3 分钟）
 
 最终交付文件（核心输出）
-运行完成后，自动生成 indexes_optimized_final/ 文件夹，包含 3 个可直接对接检索模块的标准文件，无需额外处理：
+运行完成后，自动生成 indexes/ 文件夹，包含 3 个可直接对接检索模块的标准文件，无需额外处理：
 
-indexes_optimized_final/
+indexes/
 ├─ bm25_size_512_overlap_10.pkl    # BM25稀疏检索索引（适配检索组接口）
 ├─ contriever_optimized.index       # Contriever稠密检索索引（768维，内积等价余弦相似度）
 └─ contriever_metadata.json         # 分块元数据（标注每个分块的数据集来源）
@@ -54,14 +54,14 @@ CPU 运行：自动适配，批次调整为 BATCH_SIZE=8，确保不占用过多
 
 5. 团队协作注意事项
 仅需上传核心文件 preprocess_3stage_portable.py 和本 README.md 到团队仓库
-无需上传 rag_preprocess_output/（中间结果）、indexes_optimized_final/（大文件）
+无需上传 rag_preprocess_output/（中间结果）、indexes/（大文件）
 提交仓库时，建议使用规范提交信息：feat: 新增零环境依赖版RAG预处理代码
 
 文件结构（简洁清晰，无冗余）
 
 .
 ├── preprocess_3stage_portable.py    # 核心预处理脚本（唯一需要运行的文件）
-├── indexes_optimized_final/         # 自动生成，存储最终索引文件（交付检索组）
+├── indexes/         # 自动生成，存储最终索引文件（交付检索组）
 └── README.md                        # 操作说明文档（本文件）
 
 检索测试说明
@@ -72,3 +72,17 @@ CPU 运行：自动适配，批次调整为 BATCH_SIZE=8，确保不占用过多
 
 总结
 本代码的核心优势是 “零配置、高稳定、可续跑”，无需任何环境配置经验，任何人拿到文件后，执行一行命令即可完成 RAG 预处理全流程，同时适配团队协作上传、跨设备运行，彻底解决预处理过程中 “环境报错、中断白跑、脏数据报错” 三大痛点。
+
+
+处理 FinanceBench 数据集并修改分块参数：
+
+python main.py --dataset FinanceBench --chunk_size 1024 --chunk_overlap 100 --max_samples 500
+
+处理 HotpotQA 数据集并修改批处理大小：
+
+python main.py --dataset HotpotQA --batch_size 16
+
+
+跳过数据构建阶段，直接对 Natural_Questions 进行检索测试：
+
+python main.py --dataset Natural_Questions --chunk_size 512 --skip_pipeline --query "What is the capital of France?"

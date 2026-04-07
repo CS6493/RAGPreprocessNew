@@ -23,7 +23,7 @@ class RAGDatasetProfiler:
             "Natural_Questions": {"path": "sentence-transformers/natural-questions", "split": "train", "streaming": False},
             "PubMedQA": {"path": "qiaojin/PubMedQA", "name": "pqa_labeled", "split": "train", "streaming": False},
             "FinanceBench": {"path": "PatronusAI/financebench", "split": "train", "streaming": False},
-            "HotpotQA": {"path": "hotpot_qa", "name": "distractor", "split": "validation", "streaming": False}
+            "HotpotQA": {"path": "hotpot_qa", "name": "distractor", "split": "train", "streaming": False}
         }
 
     def download_raw_data(self, dataset_name):

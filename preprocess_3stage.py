@@ -1,24 +1,6 @@
 import os
 import sys
 import subprocess
-
-# ===================== 自动安装所有依赖 =====================
-def install_package(package):
-    try:
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", package])
-    except:
-        pass
-
-print("🔧 自动检查并安装依赖库，请稍候...")
-required_packages = [
-    "torch", "faiss-cpu", "transformers", "datasets", 
-    "langchain-text-splitters", "rank-bm25", "tqdm", "numpy"
-]
-for pkg in required_packages:
-    install_package(pkg)
-print("✅ 依赖安装/检查完成！")
-
-# ===================== 导入库 =====================
 import json
 import pickle
 import torch

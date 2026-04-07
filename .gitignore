@@ -6,3 +6,10 @@ chunking_results
 cleaning_reports
 dataset_statistics
 indexes_optimized
+raw_data
+rag_datasets_extracted
+rag_output
+indexes
+
+__pycache__
+*.pkl
