@@ -39,7 +39,7 @@ def evaluate_retrieval(retriever, dataset_name, top_k=3, method="hybrid", sample
         # 禁用 query 重写的 mock 输出打印，以免打乱终端显示
         retriever.mock = True 
         
-        results = retriever.search(query=q, top_k=top_k, method=method)
+        results, _ = retriever.search(query=q, top_k=top_k, method=method)
         
         # 判断 Ground Truth 是否在召回的 Top-K 块中
         is_hit = False

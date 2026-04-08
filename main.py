@@ -173,7 +173,9 @@ def main():
             }
             
             query = test_queries.get(args.dataset, "What is the main topic?")
-            results = retriever.search(query, top_k=3, method=args.retrieval_method)
+            results, final_query = retriever.search(query, top_k=3, method=args.retrieval_method)
+            
+            print(f"最终搜索词: {final_query}")
             
             for r in results:
                 print(f"[{r['排名']}] Chunk ID: {r['块ID']} | Dataset: {r['数据集']}")

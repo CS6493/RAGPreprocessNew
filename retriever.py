@@ -96,9 +96,12 @@ class RAGRetriever:
                     "bm25_score": sparse_dict.get(idx, None),
                     "l2_distance": dense_dict.get(idx, None)
                 })
-
-        # 统一装载 Meta 信息
-        for cand in final_candidates:
-            cand["meta_info"] = self.meta[cand["chunk_id"]]
+            
+        for candidate in final_candidates:
+            idx = int(candidate["chunk_id"]) 
+            candidate["meta_info"] = self.meta[idx]
+            candidate["排名"] = candidate["rank"]
+            candidate["块ID"] = candidate["chunk_id"]
+            candidate["数据集"] = self.meta[idx].get("dataset", "unknown")
 
         return final_candidates, rewritten_q
