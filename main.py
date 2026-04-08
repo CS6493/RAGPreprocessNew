@@ -1,4 +1,6 @@
 import argparse
+import json
+import os
 from config import (
     DEFAULT_MODEL_NAME, DEFAULT_QGEN_MODEL, DEFAULT_CHUNK_SIZE, 
     DEFAULT_CHUNK_OVERLAP, DEFAULT_BATCH_SIZE, DEFAULT_OUTPUT_DIR,
@@ -42,8 +44,17 @@ def parse_args():
     parser.add_argument("--eval_samples", type=int, default=100, 
                         help="参与评估的样本数量 (默认 100)")
     
+    # 批量检索与输出
+    parser.add_argument("--query_file", type=str, default=None, 
+                        help="批量查询的 JSON 文件路径 (例如: data/queries.json)")
+    parser.add_argument("--batch_size_queries", type=int, default=10, 
+                        help="批量测试时处理的 query 数量")
+    parser.add_argument("--output_file", type=str, default="results/batch_retrieval_results.json", 
+                        help="批量检索结果的保存路径")
+    parser.add_argument("--top_k", type=int, default=3, help="检索返回的文档数量")
     
     return parser.parse_args()
+    
 
 def main():
     args = parse_args()
@@ -91,9 +102,56 @@ def main():
             chunk_size=args.chunk_size,
             mock=True
         )
+        
+        if args.query_file:
+            # 批量 JSON 查询模式
+            print("\n" + "="*60)
+            print(f"📂 批量检索测试 [{args.query_file} | Method: {args.retrieval_method}]")
+            print("="*60)
+            
+            if not os.path.exists(args.query_file):
+                print(f"❌ 找不到查询文件: {args.query_file}")
+                exit(1)
+                
+            with open(args.query_file, "r", encoding="utf-8") as f:
+                queries_data = json.load(f)
+                
+            # 截取配置的数量
+            queries_to_process = queries_data[:args.batch_size_queries]
+            all_results = []
+            
+            # 关闭 mock 打印，保持进度条整洁
+            retriever.mock = True 
+            
+            from tqdm import tqdm
+            for item in tqdm(queries_to_process, desc="Batch Retrieving"):
+                original_query = item.get("query", "")
+                if not original_query:
+                    continue
+                    
+                results, final_query = retriever.search(original_query, top_k=args.top_k, method=args.retrieval_method)
+                
+                # 组装本条查询的结果记录
+                record = {
+                    "original_query": original_query,
+                    "rewritten_query": final_query,
+                    "top_k": args.top_k,
+                    "retrieval_method": args.retrieval_method,
+                    "retrieved_results": results
+                }
+                all_results.append(record)
+                
+            # 确保输出目录存在
+            os.makedirs(os.path.dirname(args.output_file), exist_ok=True)
+            
+            # 写入 JSON
+            with open(args.output_file, "w", encoding="utf-8") as f:
+                json.dump(all_results, f, ensure_ascii=False, indent=2)
+                
+            print(f"\n✅ 批量检索完成！结果已保存至: {args.output_file}")
 
         # 分支执行逻辑：评估模式 vs 单条测试模式
-        if args.run_eval:
+        elif args.run_eval:
             evaluate_retrieval(
                 retriever=retriever,
                 dataset_name=args.dataset,
