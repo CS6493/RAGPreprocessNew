@@ -1,88 +1,231 @@
-零环境依赖・便携版 RAG 预处理代码
+# RAGPreprocessNew
 
-项目概述
-本代码是 RAG（检索增强生成）前置预处理专用便携版，无需配置虚拟环境、无需手动安装依赖，全自动完成从原始数据集加载、脏数据清洗、Token 级文本分块，到 Contriever 768 维稠密向量生成、BM25+Contriever 双索引构建的全流程。采用三阶段持久化设计，运行中断后可直接从断点续跑，彻底解决长时间预处理任务 “白跑” 问题；支持 NVIDIA GPU 自动加速（无 GPU 则无缝切换 CPU），适配 Windows/Mac/Linux 全平台，适合个人、团队协作或跨设备部署。
-核心特性（便携版专属）
-✅ 零环境依赖：无需 conda、无需虚拟环境，脚本自动检测并安装所有所需依赖库，新手开箱即用✅ 全自动 GPU 适配：自动识别 NVIDIA 显卡，启用 GPU 加速（速度提升 10~50 倍），无 GPU 则自动切换 CPU，无需手动配置✅ 三阶段落地硬盘：每阶段运行结果自动保存到本地，中断后重新运行即可续跑，不丢失任何进度✅ 脏数据终极清洗：强制转字符串、过滤空值 / 乱码 / 过短文本，彻底杜绝 TypeError、NoneType 等数据格式报错✅ 标准化输出：最终生成的索引文件可直接对接检索模块，完全适配团队协作交付需求✅ 跨平台兼容：支持 Windows、Mac、Linux，无需修改任何代码，直接运行✅ Mock 模式支持：内置检索测试，支持检索组并行开发，无需等待预处理全流程完成
-快速开始（全程 1 步，无需配置）
-1. 准备工作
-电脑安装 Python 3.9 ~ 3.11（官网免费下载，一路下一步默认安装即可）
-将代码文件 preprocess_3stage_portable.py 保存到任意文件夹（无需复杂目录结构）
-2. 一键运行
-打开电脑终端（Windows：CMD/PowerShell；Mac/Linux：Terminal）
-进入代码所在文件夹（示例命令：cd 你的代码文件夹路径）
-执行以下命令，脚本将自动完成所有操作：
-bash
-运行
-python preprocess_3stage_portable.py
-3. 运行反馈（正常状态）
-启动后首先显示 🔧 自动检查并安装依赖库...，无需手动干预
-随后打印运行设备：✅ 运行设备：CUDA（GPU 可用）或 ✅ 运行设备：CPU
-按三阶段顺序自动执行，每阶段完成后打印进度提示
-全流程结束后，自动运行检索测试，验证索引可用性
+一个面向 RAG（Retrieval-Augmented Generation）的数据预处理与检索基线工程，支持以下能力：
 
-三阶段执行流程（自动顺序执行，断点续跑）
-阶段	核心操作	输出文件（保存至 rag_preprocess_output/）	耗时说明
-阶段 1	加载 3 个数据集（HotpotQA/PubMedQA/FinanceBench）→ 脏数据清洗 → Token 级分块（512 Token + 10% 重叠）	stage1_chunks.pkl（分块文本）、stage1_metadata.json（元数据）	较快（1~5 分钟）
-阶段 2	加载分块文本 → 生成 Contriever 768 维稠密向量 → 归一化处理	stage2_embeddings.npy（向量文件）	最长（GPU：10~30 分钟；CPU：10~15 小时）
-阶段 3	加载向量 / 分块 / 元数据 → 构建 BM25 稀疏索引 + Contriever 稠密索引 → 生成最终交付文件	保存至 indexes/（3 个索引文件）	较快（1~3 分钟）
+- 多数据集统一加载与清洗（Natural Questions / PubMedQA / FinanceBench / HotpotQA）
+- 三阶段离线构建流程：文本分块 -> 向量化 -> 索引构建（BM25 + FAISS）
+- 在线检索测试：稀疏检索与稠密检索结果融合
+- 数据集统计分析与本地抽取数据导出
 
-最终交付文件（核心输出）
-运行完成后，自动生成 indexes/ 文件夹，包含 3 个可直接对接检索模块的标准文件，无需额外处理：
+## 1. 项目结构
 
-indexes/
-├─ bm25_size_512_overlap_10.pkl    # BM25稀疏检索索引（适配检索组接口）
-├─ contriever_optimized.index       # Contriever稠密检索索引（768维，内积等价余弦相似度）
-└─ contriever_metadata.json         # 分块元数据（标注每个分块的数据集来源）
+```text
+RAGPreprocessNew/
+├── main.py                         # 主入口：执行 pipeline 与检索测试
+├── config.py                       # 全局配置、默认超参数、数据集配置、产物路径生成
+├── data_loader.py                  # 数据加载 + 字段适配 + 文本清洗
+├── pipeline.py                     # 三阶段构建：chunk / embedding / index
+├── retriever.py                    # 混合检索器（BM25 + FAISS）
+├── utils.py                        # clean_text / embedding / query rewrite
+├── corpus_statistics.py            # 数据下载、query-context 提取、统计分析
+├── test.py                         # 对齐检查脚本（chunks/embeddings/meta）
+├── dataset_statistics_summary.csv  # 统计摘要样例
+├── raw_data/                       # 原始数据缓存（json）
+├── rag_datasets_extracted/         # 抽取后的 query-context 数据
+├── rag_output/                     # 预处理与索引产物目录
+└── indexes/                        # 其他索引目录（可选）
+```
 
-运行说明与注意事项
-1. 依赖安装说明
-脚本自动安装所有所需依赖（torch、faiss-cpu、transformers、datasets 等），无需手动执行pip install
-若安装失败（网络问题），可重新运行脚本，将自动重试安装
-2. 设备适配说明
-GPU 加速：仅支持 NVIDIA 显卡（自动识别，无需安装 CUDA），运行时自动调大批次（BATCH_SIZE=32）
-CPU 运行：自动适配，批次调整为 BATCH_SIZE=8，确保不占用过多内存
-3. 中断续跑说明
-若运行中途中断（关机、断网等），再次执行 python preprocess_3stage_portable.py 即可
-脚本会自动读取已保存的阶段文件，从上次完成的阶段继续执行，无需从头跑
+## 2. 环境与依赖
 
-4. 常见问题解决
-问题 1：Python 版本不兼容 → 安装 Python 3.9~3.11，重新运行
-问题 2：GPU 显存不足 → 打开代码，将 BATCH_SIZE = 32 if torch.cuda.is_available() else 8 中的 32 改为 16/8
-问题 3：文件找不到 → 确保终端进入了代码所在文件夹，或直接拖入代码文件到终端执行
-问题 4：缓存警告 → 无需处理，脚本已配置自动规避缓存路径问题
+建议 Python 3.10+。
 
-5. 团队协作注意事项
-仅需上传核心文件 preprocess_3stage_portable.py 和本 README.md 到团队仓库
-无需上传 rag_preprocess_output/（中间结果）、indexes/（大文件）
-提交仓库时，建议使用规范提交信息：feat: 新增零环境依赖版RAG预处理代码
+### 2.1 创建虚拟环境（可选）
 
-文件结构（简洁清晰，无冗余）
+```bash
+python -m venv .venv
+source .venv/bin/activate
+```
 
-.
-├── preprocess_3stage_portable.py    # 核心预处理脚本（唯一需要运行的文件）
-├── indexes/         # 自动生成，存储最终索引文件（交付检索组）
-└── README.md                        # 操作说明文档（本文件）
+### 2.2 安装依赖
 
-检索测试说明
-代码全流程执行完成后，会自动运行 Mock 模式检索测试：
-测试查询：What is RAG technology?
-输出内容：检索排名、分块所属数据集、分块 ID
-作用：快速验证索引文件可用性，支持检索组并行开发，无需额外编写测试代码
+```bash
+pip install -U \
+	torch \
+	transformers \
+	datasets \
+	tqdm \
+	numpy \
+	pandas \
+	faiss-cpu \
+	rank-bm25 \
+	langchain-text-splitters
+```
 
-总结
-本代码的核心优势是 “零配置、高稳定、可续跑”，无需任何环境配置经验，任何人拿到文件后，执行一行命令即可完成 RAG 预处理全流程，同时适配团队协作上传、跨设备运行，彻底解决预处理过程中 “环境报错、中断白跑、脏数据报错” 三大痛点。
+如果你使用 Apple Silicon 并希望加速，可按本机环境替换为适配版本（例如 faiss 或 torch 的平台包）。
+
+## 3. 核心流程说明
+
+主流程位于 `main.py`：
+
+1. 读取命令行参数与数据集配置
+2. 加载并清洗数据（`data_loader.py`）
+3. 阶段 1：按 token 长度分块并保存 chunks/meta（`pipeline.py`）
+4. 阶段 2：使用 Contriever 生成 dense embeddings
+5. 阶段 3：构建 BM25 和 FAISS 索引
+6. 使用 `RAGRetriever` 进行检索测试
+
+默认模型与参数：
+
+- Embedding 模型：facebook/contriever-msmarco
+- Query 重写模型：google/flan-t5-small
+- chunk_size：512
+- chunk_overlap：50
+- batch_size：8
+- output_dir：./rag_output
+
+## 4. 快速开始
+
+### 4.1 完整构建 + 检索测试
+
+```bash
+python main.py \
+	--dataset Natural_Questions \
+	--max_samples 1000 \
+	--chunk_size 512 \
+	--chunk_overlap 50 \
+	--batch_size 8 \
+	--query "when did richmond last play in a preliminary final"
+```
+
+### 4.2 仅检索（跳过构建）
+
+前提是对应数据集的索引产物已经存在于 `rag_output/<dataset>/`。
+
+```bash
+python main.py \
+	--dataset Natural_Questions \
+	--chunk_size 512 \
+	--chunk_overlap 50 \
+	--skip_pipeline \
+	--query "when did richmond last play in a preliminary final"
+```
+
+### 4.3 可选参数
+
+- `--dataset`：必填，支持 `Natural_Questions` / `PubMedQA` / `FinanceBench` / `HotpotQA`
+- `--max_samples`：默认 1000，设为 0 表示全量处理
+- `--model_name`：embedding 模型名
+- `--qgen_model`：query 重写模型名
+- `--output_dir`：输出目录
+- `--chunk_size`：分块 token 长度
+- `--chunk_overlap`：块重叠 token 数
+- `--batch_size`：向量化批大小
+- `--skip_pipeline`：跳过构建，直接做检索
+- `--query`：测试查询语句
+
+## 5. 输出产物说明
+
+每个数据集在 `rag_output/<dataset>/` 下生成：
+
+- `<prefix>_chunks.pkl`：分块文本
+- `<prefix>_meta.json`：块级元数据
+- `<prefix>_embeddings.npy`：dense 向量
+- `<prefix>_bm25.pkl`：BM25 索引
+- `<prefix>_faiss.index`：FAISS 索引
+
+其中 `<prefix>` 规则为：
+
+```text
+{dataset}_{split}_cs{chunk_size}_co{chunk_overlap}
+```
+
+例如：
+
+```text
+Natural_Questions_train_cs512_co50
+```
+
+## 6. 检索逻辑（当前实现）
+
+`retriever.py` 的 `search` 逻辑：
+
+1. 先做 query rewrite
+2. BM25 取前 `top_k*3`
+3. FAISS 取前 `top_k*3`
+4. 按顺序融合并去重，返回前 `top_k`
+
+返回字段为：排名、数据集、块 ID。
+
+注意：`RAGRetriever` 默认 `mock=True`，因此 query rewrite 会输出 `[MOCK] ...` 前缀。如果需要真实重写，可将该默认值改为 `False` 或在初始化处显式传入。
+
+## 7. 数据统计脚本
+
+运行统计流程：
+
+```bash
+python corpus_statistics.py
+```
+
+该脚本会：
+
+1. 下载并保存各数据集原始样本到 `raw_data/`
+2. 提取 `query + context` 到 `rag_datasets_extracted/`
+3. 计算统计指标并汇总到 `dataset_statistics_summary.csv`
+
+当前仓库中已包含一个统计摘要样例文件。
+
+## 8. 结果校验脚本
+
+运行：
+
+```bash
+python test.py
+```
+
+用于检查以下问题：
+
+- chunks / embeddings / meta 数量是否一一对应
+- embeddings 维度是否正常
+- 抽样查看文本、元数据和向量是否存在 NaN/Inf
+
+注意：`test.py` 里 `PREFIX` 当前是硬编码示例路径，与你实际目录结构不一致时，需要先修改为正确前缀（例如 `./rag_output/HotpotQA/HotpotQA_train_cs512_co50`）。
+
+## 9. 常见问题
+
+### 9.1 `--skip_pipeline` 后报索引文件不存在
+
+请先执行一次不带 `--skip_pipeline` 的完整构建，确保 `rag_output/<dataset>/` 下包含 bm25/faiss/meta/chunks/embeddings。
+
+### 9.2 下载数据集或模型较慢
+
+- 确保网络可访问 Hugging Face
+- 可提前设置镜像或缓存目录
+- 项目默认使用 `~/.cache/huggingface`
+
+### 9.3 内存或显存不足
+
+- 减小 `--max_samples`
+- 减小 `--batch_size`
+- 先在单一数据集上验证流程
+
+## 10. 后续可改进方向
+
+- 将依赖固定到 `requirements.txt`
+- 为 `RAGRetriever` 增加可配置融合打分
+- 增加检索质量指标（Recall@k、MRR）
+- 增加单元测试与端到端回归测试
+
 
 
 处理 FinanceBench 数据集并修改分块参数：
 
+Bash
 python main.py --dataset FinanceBench --chunk_size 1024 --chunk_overlap 100 --max_samples 500
-
 处理 HotpotQA 数据集并修改批处理大小：
 
+Bash
 python main.py --dataset HotpotQA --batch_size 16
-
-
 跳过数据构建阶段，直接对 Natural_Questions 进行检索测试：
 
+Bash
 python main.py --dataset Natural_Questions --chunk_size 512 --skip_pipeline --query "What is the capital of France?"
+
+测试一：只测试 BM25 稀疏检索的性能
+
+Bash
+python main.py --dataset PubMedQA --skip_pipeline --retrieval_method sparse --run_eval --eval_samples 200
+测试二：只测试 Contriever 稠密检索的性能
+
+Bash
+python main.py --dataset PubMedQA --skip_pipeline --retrieval_method dense --run_eval --eval_samples 200

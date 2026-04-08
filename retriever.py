@@ -1,3 +1,4 @@
+# retriever.py 完整修改
 import json
 import pickle
 import numpy as np
@@ -24,24 +25,48 @@ class RAGRetriever:
         with open(paths["meta"], "r", encoding="utf-8") as f:
             self.meta = json.load(f)
 
-    def search(self, query, top_k=3):
+    def search(self, query, top_k=3, method="hybrid"):
+        """
+        支持三种模式: 'sparse' (BM25), 'dense' (Contriever), 'hybrid' (混合)
+        """
+        # 查询重写
         query = rewrite_query(query, self.q_tokenizer, self.q_model, DEVICE, self.mock)
-        print(f"\n🔍 最终查询：{query}")
         
-        bm_scores = self.bm25.get_scores(query.split())
-        bm_top = np.argsort(bm_scores)[::-1][:top_k*3]
-        
-        q_emb = get_embeddings([query], self.tokenizer, self.model, DEVICE, self.chunk_size)
-        _, dense_top = self.dense.search(q_emb, top_k*3)
-
         res, seen = [], set()
-        for idx in list(bm_top) + list(dense_top[0]):
-            if len(res) >= top_k or idx in seen: 
+        candidates = []
+
+        # 1. 稀疏检索 (Sparse - BM25)
+        if method in ["sparse", "hybrid"]:
+            bm_scores = self.bm25.get_scores(query.split())
+            bm_top = np.argsort(bm_scores)[::-1][:top_k if method == "sparse" else top_k*2]
+            if method == "sparse":
+                candidates = list(bm_top)
+
+        # 2. 稠密检索 (Dense - Contriever)
+        if method in ["dense", "hybrid"]:
+            q_emb = get_embeddings([query], self.tokenizer, self.model, DEVICE, self.chunk_size)
+            _, dense_top = self.dense.search(q_emb, top_k if method == "dense" else top_k*2)
+            if method == "dense":
+                candidates = list(dense_top[0])
+
+        # 3. 混合检索 (Hybrid - 交替合并)
+        if method == "hybrid":
+            # 简单的交替合并策略 (Round-Robin)
+            for b, d in zip(list(bm_top), list(dense_top[0])):
+                candidates.extend([b, d])
+
+        # 获取元数据，去重并截断
+        for idx in candidates:
+            if len(res) >= top_k:
+                break
+            if idx in seen:
                 continue
             seen.add(idx)
             res.append({
                 "排名": len(res) + 1, 
                 "数据集": self.meta[idx]["dataset"], 
-                "块ID": int(idx)
+                "块ID": int(idx),
+                "meta_info": self.meta[idx] # 保留完整 meta 用于后续评估
             })
+            
         return res

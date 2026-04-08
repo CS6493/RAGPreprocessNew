@@ -7,6 +7,8 @@ from config import (
 from data_loader import load_and_preprocess_dataset
 from pipeline import stage1_chunking, stage2_embedding, stage3_indexing
 from retriever import RAGRetriever
+from evaluation import evaluate_retrieval
+
 
 def parse_args():
     parser = argparse.ArgumentParser(description="RAG 多阶段数据预处理与索引构建模块")
@@ -30,6 +32,16 @@ def parse_args():
     # 功能开关
     parser.add_argument("--skip_pipeline", action="store_true", help="跳过构建直接测试检索")
     parser.add_argument("--query", type=str, default="What is RAG technology?", help="测试检索的查询词")
+    
+    # 检索方法和评估参数
+    parser.add_argument("--retrieval_method", type=str, default="hybrid", 
+                        choices=["dense", "sparse", "hybrid"], 
+                        help="选择检索策略: dense(稠密), sparse(稀疏), hybrid(混合)")
+    parser.add_argument("--run_eval", action="store_true", 
+                        help="是否执行自动化评估 (如果不加此参数，则默认只做单条交互式测试)")
+    parser.add_argument("--eval_samples", type=int, default=100, 
+                        help="参与评估的样本数量 (默认 100)")
+    
     
     return parser.parse_args()
 
@@ -73,14 +85,41 @@ def main():
     print("="*60)
     try:
         retriever = RAGRetriever(
-            paths=paths, 
-            embed_model_name=args.model_name, 
-            qgen_model_name=args.qgen_model, 
-            chunk_size=args.chunk_size
+            paths=paths,
+            embed_model_name=args.model_name,
+            qgen_model_name=args.qgen_model,
+            chunk_size=args.chunk_size,
+            mock=True
         )
-        results = retriever.search(args.query)
-        for item in results:
-            print(item)
+
+        # 分支执行逻辑：评估模式 vs 单条测试模式
+        if args.run_eval:
+            evaluate_retrieval(
+                retriever=retriever,
+                dataset_name=args.dataset,
+                top_k=3,
+                method=args.retrieval_method,
+                sample_size=args.eval_samples
+            )
+        else:
+            # 单条交互测试模式
+            print("\n" + "="*60)
+            print(f"🧪 检索功能单条测试 [{args.dataset} | Method: {args.retrieval_method}]")
+            print("="*60)
+            
+            test_queries = {
+                "Natural_Questions": "Who wrote the song 'Hey Jude'?",
+                "PubMedQA": "Do mitochondria play a role in programmed cell death?",
+                "FinanceBench": "What was the capital expenditure for 3M in 2018?",
+                "HotpotQA": "Were Scott Derrickson and Ed Wood of the same nationality?"
+            }
+            
+            query = test_queries.get(args.dataset, "What is the main topic?")
+            results = retriever.search(query, top_k=3, method=args.retrieval_method)
+            
+            for r in results:
+                print(f"[{r['排名']}] Chunk ID: {r['块ID']} | Dataset: {r['数据集']}")
+                print(f" -> 来源文档 ID: {r['meta_info'].get('hotpot_id', r['meta_info'].get('pubid', 'N/A'))}")
     except FileNotFoundError as e:
         print(f"检索失败: 找不到对应的索引文件，请先完整运行 pipeline。错误详情: {e}")
 
