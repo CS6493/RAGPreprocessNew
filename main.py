@@ -44,6 +44,7 @@ def parse_args():
     gen_group.add_argument("--api_base_url", type=str, default=None, help="API Base URL (如果 use_api=True)")
     gen_group.add_argument("--temperature", type=float, default=DEFAULT_TEMPERATURE)
     gen_group.add_argument("--max_tokens", type=int, default=DEFAULT_MAX_TOKENS)
+    gen_group.add_argument("--api_provider", type=str, default="DeepSeek", choices=["DeepSeek", "Qwen"])
 
     # --- 评估与测试参数组 ---
     eval_group = parser.add_argument_group("评估与测试 (Eval & Testing)")
@@ -52,6 +53,7 @@ def parse_args():
     eval_group.add_argument("--query_file", type=str, default=None, help="批量查询的 JSON 文件路径")
     eval_group.add_argument("--batch_size_queries", type=int, default=10, help="批量测试时处理的 query 数量")
     eval_group.add_argument("--output_file", type=str, default="results/output.json", help="输出结果的保存路径")
+    
     
     return parser.parse_args()
 
@@ -88,13 +90,18 @@ def main():
 
     generator = None
     if args.do_generate:
-        generator = RAGGenerator(
-            model_name=args.gen_model,
-            use_api=args.use_api,
-            api_key=args.api_key,
-            api_base_url=args.api_base_url,
-            use_4bit=not args.use_api
-        )
+        if args.use_api:
+            from config import API_CONFIG
+            cfg = API_CONFIG[args.api_provider]
+            generator = RAGGenerator(
+                model_name=cfg["model"],
+                use_api=True,
+                api_key=cfg["api_key"],
+                api_base_url=cfg["base_url"],
+                max_tokens=args.max_tokens
+            )
+        else:
+            generator = RAGGenerator(model_name=args.gen_model, use_4bit=True)
 
     # ==================== 3. 执行评估 / 测试模式 ====================
     

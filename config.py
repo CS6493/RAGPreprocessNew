@@ -48,6 +48,23 @@ DEFAULT_GEN_MODEL = "Qwen/Qwen2.5-7B-Instruct"
 DEFAULT_MAX_TOKENS = 128
 DEFAULT_TEMPERATURE = 0.1
 
+# 新增 API 相关配置
+API_CONFIG = {
+    "DeepSeek": {
+        "api_key": "--", # 替换为你的 Key
+        "base_url": "https://api.deepseek.com",
+        "model": "deepseek-chat"
+    },
+    "Qwen": {
+        "api_key": "--", # 替换为你的 Key
+        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "model": "qwen-plus" # 或 qwen-max
+    }
+}
+
+# 默认生成模型选择
+DEFAULT_API_PROVIDER = "DeepSeek"
+
 def get_file_paths(base_dir, dataset_name, split, chunk_size, chunk_overlap):
     """根据参数生成合理且具有辨识度的文件名"""
     os.makedirs(base_dir, exist_ok=True)

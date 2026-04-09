@@ -10,6 +10,7 @@ raw_data
 rag_datasets_extracted
 rag_output
 indexes
+.api_keys
 
 __pycache__
 *.pkl

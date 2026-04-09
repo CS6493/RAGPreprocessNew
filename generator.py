@@ -116,11 +116,11 @@ class RAGGenerator:
         temperature = temperature or self.temperature
         
         # 将多个 chunk 的文本拼接为一个长字符串
-        context_str = "\n\n---\n\n".join([f"Evidence [{i+1}]: {ctx}" for i, ctx in enumerate(contexts)])
+        context_str = "\n\n".join([f"[Document {i+1}]: {text}" for i, text in enumerate(contexts)])
         
         # 组装 Prompt
         system_prompt = "You are an expert Q&A assistant. Answer the question based ONLY on the provided evidence. If the evidence is insufficient, say 'Insufficient evidence.'"
-        user_prompt = f"Question: {question}\n\nEvidence:\n{context_str}\n\nAnswer:"
+        user_prompt = f"Contexts:\n{context_str}\n\nQuestion: {question}\n\nAnswer (concise):"
         
         messages = [
             {"role": "system", "content": system_prompt},
@@ -133,8 +133,7 @@ class RAGGenerator:
             return self._generate_local(messages, max_tokens, temperature)
 
 
-    def _generate_via_api(self, messages: List[Dict[str, str]], max_tokens: int, temperature: float) -> str:
-        """使用大模型 API 生成（解决大型模型本地部署困难的问题）"""
+    def _generate_api(self, messages, max_tokens, temperature) -> str:
         try:
             response = self.client.chat.completions.create(
                 model=self.model_name,
@@ -144,8 +143,7 @@ class RAGGenerator:
             )
             return response.choices[0].message.content.strip()
         except Exception as e:
-            print(f"API Generation Error: {e}")
-            return ""
+            return f"API Error: {str(e)}"
 
     @torch.inference_mode()
     def _generate_local(self, messages: List[Dict[str, str]], max_new_tokens: int, temperature: float) -> str:
