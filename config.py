@@ -51,12 +51,12 @@ DEFAULT_TEMPERATURE = 0.1
 # 新增 API 相关配置
 API_CONFIG = {
     "DeepSeek": {
-        "api_key": "--", # 替换为你的 Key
+        "api_key": "sk-cee7878a656148c38d091624a06887a3", # 替换为你的 Key
         "base_url": "https://api.deepseek.com",
         "model": "deepseek-chat"
     },
     "Qwen": {
-        "api_key": "--", # 替换为你的 Key
+        "api_key": "sk-fd297ac637d844feb60524a70dd8e368", # 替换为你的 Key
         "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
         "model": "qwen-plus" # 或 qwen-max
     }

@@ -119,7 +119,7 @@ def calculate_fact_score_via_llm(prediction, contexts, generator):
     ]
     
     if generator.use_api:
-        judge_res = generator._generate_via_api(messages, max_tokens=10, temperature=0.0)
+        judge_res = generator._generate_api(messages, max_tokens=10, temperature=0.0)
     else:
         judge_res = generator._generate_local(messages, max_new_tokens=10, temperature=0.0)
         
