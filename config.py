@@ -43,6 +43,11 @@ DATASETS_CONFIG = {
     }
 }
 
+# ===================== 生成模型 (Generation) 默认参数 =====================
+DEFAULT_GEN_MODEL = "Qwen/Qwen2.5-7B-Instruct"
+DEFAULT_MAX_TOKENS = 128
+DEFAULT_TEMPERATURE = 0.1
+
 def get_file_paths(base_dir, dataset_name, split, chunk_size, chunk_overlap):
     """根据参数生成合理且具有辨识度的文件名"""
     os.makedirs(base_dir, exist_ok=True)
