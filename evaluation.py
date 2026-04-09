@@ -15,12 +15,11 @@ def evaluate_retrieval(retriever, dataset_name, top_k=3, method="hybrid", sample
     for item in retriever.meta:
         # 不同数据集的 query 和 answer 字段可能不同，这里做统一适配
         q = item.get("question") or item.get("original_question") or item.get("query")
-        a = item.get("answer") or item.get("final_decision") or item.get("long_answer")
-        # 提取能够标识该文档唯一性的 ID
-        doc_id = item.get("hotpot_id") or item.get("pubid") or item.get("financebench_id") or a
-        
+        a = item.get("answer", item.get("final_decision", item.get("long_answer", item)))        # 提取能够标识该文档唯一性的 ID
+        doc_id = item.get("source_id", item.get("financebench_id", item.get("hotpot_id", item.get("pubid", a))))        
+
         if q and doc_id and q not in unique_queries:
-            unique_queries[q] = doc_id
+            unique_queries[q] = {"doc_id": doc_id, "answer": a}
 
     all_queries = list(unique_queries.keys())
     if not all_queries:
@@ -37,7 +36,7 @@ def evaluate_retrieval(retriever, dataset_name, top_k=3, method="hybrid", sample
     
     # 3. 执行批量检索并统计召回率
     for q in tqdm(test_queries, desc="Evaluating"):
-        ground_truth_id = unique_queries[q]
+        ground_truth_id = unique_queries[q]["doc_id"]
         
         # 禁用 query 重写的 mock 输出打印，以免打乱终端显示
         retriever.mock = True 
@@ -48,8 +47,7 @@ def evaluate_retrieval(retriever, dataset_name, top_k=3, method="hybrid", sample
         is_hit = False
         for res in results:
             retrieved_meta = res["meta_info"]
-            retrieved_id = retrieved_meta.get("hotpot_id") or retrieved_meta.get("pubid") or retrieved_meta.get("financebench_id") or retrieved_meta.get("answer")
-            
+            retrieved_id = retrieved_meta.get("source_id", retrieved_meta.get("financebench_id", retrieved_meta.get("hotpot_id", retrieved_meta.get("pubid", retrieved_meta.get("answer")))))            
             if retrieved_id == ground_truth_id:
                 is_hit = True
                 break

@@ -153,10 +153,10 @@ def main():
     # 模式 C: 单条交互测试
     else:
         test_queries = {
-            "Natural_Questions": "Who wrote the song 'Hey Jude'?",
+            "Natural_Questions": "when did richmond last play in a preliminary final",
             "PubMedQA": "Do mitochondria play a role in programmed cell death?",
-            "FinanceBench": "What was the capital expenditure for 3M in 2018?",
-            "HotpotQA": "Were Scott Derrickson and Ed Wood of the same nationality?"
+            "FinanceBench": "What is the FY2018 capital expenditure amount (in USD millions) for 3M?",
+            "HotpotQA": "Which tennis player won more Grand Slam titles, Henri Leconte or Jonathan Stark?"
         }
         query = test_queries.get(args.dataset, "What is the main topic?")
         
@@ -165,7 +165,7 @@ def main():
         print(f"🔍 检索词: {final_query}")
         print("📄 召回文档:")
         for r in results:
-            print(f"  -> [{r['排名']}] ID: {r['块ID']} | 来源: {r['meta_info'].get('hotpot_id', r['meta_info'].get('pubid', 'N/A'))}")
+            print(f"  -> [{r['排名']}] ID: {r['块ID']} | 来源: {r['meta_info'].get('source_id', 'N/A')}")
             
         if args.do_generate:
             contexts = [r["meta_info"].get("text", f"Context from block {r['块ID']}") for r in results]

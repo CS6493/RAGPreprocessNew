@@ -42,7 +42,8 @@ def load_and_preprocess_dataset(dataset_name, max_samples=1000):
                 "question": item.get("question", ""),
                 "answer": item.get("answer", ""),
                 "type": item.get("type", ""),
-                "level": item.get("level", "")
+                "level": item.get("level", ""),
+                "source_id": item.get("id", ""),
             })
             
     elif dataset_name == "PubMedQA":
@@ -68,9 +69,11 @@ def load_and_preprocess_dataset(dataset_name, max_samples=1000):
                 "dataset": dataset_name,
                 "pubid": str(item.get("pubid", "unknown")),
                 "question": item.get("question", ""),
+                "answer": item.get("final_decision", ""),
                 "long_answer": item.get("long_answer", ""),     # 详细的医学解释
                 "final_decision": item.get("final_decision", ""), # 简答结论 (yes/no/maybe)
-                "meshes": ctx_data.get("meshes", [])            # 医学主题词列表，极好的检索过滤条件
+                "meshes": ctx_data.get("meshes", []),            # 医学主题词列表，极好的检索过滤条件
+                "source_id": item.get("pubid", ""),
             })
             
     elif dataset_name == "FinanceBench":
@@ -102,6 +105,7 @@ def load_and_preprocess_dataset(dataset_name, max_samples=1000):
                 "doc_period": str(item.get("doc_period", "")),   # 年份，如 2018
                 "question": item.get("question", ""),
                 "answer": item.get("answer", ""),
+                "source_id": item.get("financebench_id", "unknown"),
                 "doc_link": item.get("doc_link", "unknown")
             })
             
@@ -111,7 +115,10 @@ def load_and_preprocess_dataset(dataset_name, max_samples=1000):
             docs.append(clean_text(txt))
             meta.append({
                 "dataset": dataset_name,
-                "query": item.get("query", "unknown")
+                "query": item.get("query", "unknown"),
+                "question": item.get("query", ""),   
+                "answer": item.get("answer", ""),
+                "source_id": "nq_" + str(hash(item.get("query",""))) # NQ通常无ID，生成一个
             })
             
     return docs, meta

@@ -12,7 +12,9 @@ class RAGGenerator:
         api_key: Optional[str] = None,
         api_base_url: Optional[str] = None,
         use_4bit: bool = True,
-        device_map: str = "auto"
+        device_map: str = "auto",
+        max_tokens: int = 128,
+        temperature: float = 0.1
     ):
         """
         初始化生成模块。
@@ -22,6 +24,8 @@ class RAGGenerator:
         """
         self.model_name = model_name
         self.use_api = use_api
+        self.max_tokens = max_tokens
+        self.temperature = temperature
         
         if self.use_api:
             print(f"[*] 初始化 API 客户端模式 | 模型: {self.model_name}")
@@ -106,16 +110,28 @@ class RAGGenerator:
 
     # ================= 核心生成推断逻辑 (自动分发本地与API) =================
 
-    def generate(self, question: str, contexts: List[str], max_new_tokens: int = 96, temperature: float = 0.0) -> str:
-        """
-        端到端入口：输入问题和上下文，输出最终生成的答案
-        """
-        messages = self.build_instruct_messages(question, contexts)
+    def generate(self, question: str, contexts: List[str], max_tokens: int = None, temperature: float = None) -> str:
+        """接收问题和相关文档列表，生成回答"""
+        max_tokens = max_tokens or self.max_tokens
+        temperature = temperature or self.temperature
+        
+        # 将多个 chunk 的文本拼接为一个长字符串
+        context_str = "\n\n---\n\n".join([f"Evidence [{i+1}]: {ctx}" for i, ctx in enumerate(contexts)])
+        
+        # 组装 Prompt
+        system_prompt = "You are an expert Q&A assistant. Answer the question based ONLY on the provided evidence. If the evidence is insufficient, say 'Insufficient evidence.'"
+        user_prompt = f"Question: {question}\n\nEvidence:\n{context_str}\n\nAnswer:"
+        
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ]
         
         if self.use_api:
-            return self._generate_via_api(messages, max_new_tokens, temperature)
+            return self._generate_api(messages, max_tokens, temperature)
         else:
-            return self._generate_local(messages, max_new_tokens, temperature)
+            return self._generate_local(messages, max_tokens, temperature)
+
 
     def _generate_via_api(self, messages: List[Dict[str, str]], max_tokens: int, temperature: float) -> str:
         """使用大模型 API 生成（解决大型模型本地部署困难的问题）"""

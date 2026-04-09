@@ -23,8 +23,11 @@ def stage1_chunking(docs, meta, dataset_name, model_name, chunk_size, chunk_over
     all_chunks, all_meta = [], []
     for i, doc in enumerate(tqdm(docs, desc="Token分块")):
         chunks = splitter.split_text(doc)
-        all_chunks.extend(chunks)
-        all_meta.extend([meta[i]] * len(chunks))
+        for chunk in chunks:
+            all_chunks.append(chunk)
+            chunk_meta = meta[i].copy()
+            chunk_meta["text"] = chunk  # 这里的 "text" 供 Generator 使用
+            all_meta.append(chunk_meta)
 
     with open(paths["chunks"], "wb") as f:
         pickle.dump(all_chunks, f)
