@@ -257,5 +257,5 @@ python main --dataset Natural_Questions --max-sample 1000 --batch_size 16
 python main --dataset PubMedQA --max-sample 1000 --batch_size 32
 python main --dataset FinanceBench --max-sample 1000 --batch_size 8
 5. 其他指令场景见指令示例
-6. 运行UI界面：streamlit run app.py
+6. 运行UI界面：streamlit run app.py (需要先运行过预处理阶段，见4)
 
