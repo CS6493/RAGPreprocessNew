@@ -1,0 +1,10 @@
+streamlit
+torch
+transformers
+faiss-cpu
+rank_bm25
+openai
+datasets
+tqdm
+langchain-text-splitters
+numpy
