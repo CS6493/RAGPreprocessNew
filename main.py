@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 
 from config import (
     DEFAULT_MODEL_NAME, DEFAULT_QGEN_MODEL, DEFAULT_CHUNK_SIZE, 

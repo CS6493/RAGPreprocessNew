@@ -43,7 +43,7 @@ def stage2_embedding(model_name, batch_size, chunk_size, paths):
         chunks = pickle.load(f)
 
     tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = AutoModel.from_pretrained(model_name).to(DEVICE)
+    model = AutoModel.from_pretrained(model_name, use_safetensors=True).to(DEVICE)
     model.eval()
 
     embeddings = []
