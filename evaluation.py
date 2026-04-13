@@ -1,7 +1,12 @@
+import argparse
+import json
+import os
 import random
 import re
 import string
+from datetime import datetime
 from collections import Counter
+from typing import Any, Dict, List, Optional
 from tqdm import tqdm
 
 def evaluate_retrieval(retriever, dataset_name, top_k=3, method="hybrid", sample_size=100):
@@ -193,3 +198,367 @@ def evaluate_end_to_end(retriever, generator, dataset_name, top_k=3, method="hyb
     print("="*60 + "\n")
     
     return {"EM": em_avg, "F1": f1_avg, "FActScore": fact_avg}
+
+
+# ===================== 离线检索结果驱动的生成与评估 =====================
+
+def _extract_ground_truth(item: Dict[str, Any]) -> str:
+    """兼容不同字段命名，提取标准答案。"""
+    return str(
+        item.get("answer")
+        or item.get("final_decision")
+        or item.get("long_answer")
+        or item.get("gold_answer")
+        or ""
+    ).strip()
+
+
+def load_offline_qa_data(offline_file: str, sample_size: int = 0, shuffle: bool = False) -> List[Dict[str, Any]]:
+    """加载离线检索结果文件（如 data/test_knowledge.json）。"""
+    with open(offline_file, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    valid_data = [
+        x for x in data
+        if x.get("question") and str(x.get("knowledge", "")).strip()
+    ]
+
+    if shuffle:
+        random.shuffle(valid_data)
+
+    if sample_size > 0:
+        valid_data = valid_data[:sample_size]
+
+    return valid_data
+
+
+def _evaluate_prediction_records(
+    records: List[Dict[str, Any]],
+    prediction_field: str = "generated_answer",
+) -> Dict[str, Any]:
+    """对已包含预测答案的记录计算每题与整体 EM/F1。"""
+    if not records:
+        return {
+            "overall": {"EM": 0.0, "F1": 0.0, "Count": 0},
+            "items": [],
+        }
+
+    em_total = 0
+    f1_total = 0.0
+    valid_count = 0
+    evaluated_items: List[Dict[str, Any]] = []
+
+    for item in records:
+        pred = str(item.get(prediction_field, "")).strip()
+        gt = _extract_ground_truth(item)
+        item_eval = dict(item)
+
+        if not gt:
+            item_eval.update(
+                {
+                    "em": None,
+                    "f1": None,
+                    "normalized_prediction": normalize_answer(pred),
+                    "normalized_answer": "",
+                    "has_ground_truth": False,
+                }
+            )
+            evaluated_items.append(item_eval)
+            continue
+
+        valid_count += 1
+        em = int(exact_match_score(pred, gt))
+        f1 = f1_score(pred, gt)
+
+        em_total += em
+        f1_total += f1
+        item_eval.update(
+            {
+                "em": em,
+                "f1": f1,
+                "normalized_prediction": normalize_answer(pred),
+                "normalized_answer": normalize_answer(gt),
+                "has_ground_truth": True,
+            }
+        )
+        evaluated_items.append(item_eval)
+
+    if valid_count == 0:
+        return {
+            "overall": {"EM": 0.0, "F1": 0.0, "Count": 0},
+            "items": evaluated_items,
+        }
+
+    return {
+        "overall": {
+            "EM": (em_total / valid_count) * 100,
+            "F1": (f1_total / valid_count) * 100,
+            "Count": valid_count,
+        },
+        "items": evaluated_items,
+    }
+
+
+def run_offline_generation_and_evaluation(
+    generator,
+    offline_file: str,
+    sample_size: int = 50,
+    output_dir: str = "results",
+    output_prefix: str = "offline_test_knowledge",
+    max_tokens: Optional[int] = None,
+    temperature: Optional[float] = None,
+    max_sources: int = 8,
+    max_chars_per_source: int = 1200,
+    run_generation: bool = True,
+    run_evaluation: bool = True,
+    do_factscore: bool = False,
+    shuffle: bool = False,
+) -> Dict[str, Any]:
+    """
+    基于离线 knowledge 数据执行：
+    1) 生成（可单独执行）
+    2) 评估（可单独执行，或接着生成结果评估）
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    data = load_offline_qa_data(offline_file=offline_file, sample_size=sample_size, shuffle=shuffle)
+
+    print(f"\n📦 离线样本加载完成: {len(data)} 条 | 文件: {offline_file}")
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    pred_file = os.path.join(output_dir, f"{output_prefix}_predictions_{timestamp}.json")
+    summary_file = os.path.join(output_dir, f"{output_prefix}_summary_{timestamp}.json")
+    detailed_file = os.path.join(output_dir, f"{output_prefix}_detailed_{timestamp}.json")
+
+    records: List[Dict[str, Any]] = []
+    fact_total = 0
+    generated_in_evaluate_mode = False
+
+    if run_generation:
+        print("\n🤖 开始离线知识驱动生成...")
+        for item in tqdm(data, desc="Offline Generate"):
+            question = str(item.get("question", "")).strip()
+            knowledge = str(item.get("knowledge", "")).strip()
+            ground_truth = _extract_ground_truth(item)
+
+            prediction = generator.generate_from_knowledge(
+                question=question,
+                knowledge=knowledge,
+                max_tokens=max_tokens,
+                temperature=temperature,
+            )
+
+            out = {
+                "id": item.get("id"),
+                "question": question,
+                "answer": ground_truth,
+                "generated_answer": prediction,
+                "type": item.get("type"),
+                "level": item.get("level"),
+                "knowledge_used": knowledge,
+            }
+
+            if run_evaluation and do_factscore and prediction and prediction.lower() != "insufficient evidence.":
+                fact = calculate_fact_score_via_llm(prediction, [knowledge], generator)
+                out["fact_score"] = fact
+                fact_total += fact
+
+            records.append(out)
+
+        with open(pred_file, "w", encoding="utf-8") as f:
+            json.dump(records, f, ensure_ascii=False, indent=2)
+        print(f"✅ 生成结果已保存: {pred_file}")
+    else:
+        # evaluate-only 模式：若输入文件没有 generated_answer，则自动补全生成
+        missing_pred = 0
+        for item in data:
+            if not str(item.get("generated_answer", "")).strip():
+                missing_pred += 1
+
+        if missing_pred > 0 and generator is not None:
+            print(f"\n⚠️ 检测到 {missing_pred} 条样本缺少 generated_answer，开始自动生成后再评估...")
+            generated_in_evaluate_mode = True
+            for item in tqdm(data, desc="Auto Generate For Evaluate"):
+                question = str(item.get("question", "")).strip()
+                knowledge = str(item.get("knowledge", "")).strip()
+                ground_truth = _extract_ground_truth(item)
+
+                prediction = str(item.get("generated_answer", "")).strip()
+                if not prediction:
+                    prediction = generator.generate_from_knowledge(
+                        question=question,
+                        knowledge=knowledge,
+                        max_tokens=max_tokens,
+                        temperature=temperature,
+                    )
+
+                out = dict(item)
+                out.update(
+                    {
+                        "id": item.get("id"),
+                        "question": question,
+                        "answer": ground_truth,
+                        "generated_answer": prediction,
+                        "type": item.get("type"),
+                        "level": item.get("level"),
+                        "knowledge_used": knowledge,
+                    }
+                )
+                records.append(out)
+
+            with open(pred_file, "w", encoding="utf-8") as f:
+                json.dump(records, f, ensure_ascii=False, indent=2)
+            print(f"✅ 自动补全生成结果已保存: {pred_file}")
+        else:
+            # 不运行生成时，默认把离线文件当作已含预测文件来评估
+            for item in data:
+                records.append(item)
+
+    summary: Dict[str, Any] = {
+        "offline_file": offline_file,
+        "sample_count": len(records),
+        "predictions_file": pred_file if (run_generation or generated_in_evaluate_mode) else offline_file,
+        "detailed_file": detailed_file,
+    }
+
+    if run_evaluation:
+        eval_res = _evaluate_prediction_records(records, prediction_field="generated_answer")
+        metrics = eval_res["overall"]
+        records_with_metrics = eval_res["items"]
+        summary.update(metrics)
+
+        if do_factscore and records:
+            summary["FActScore"] = (fact_total / len(records)) * 100
+
+        # 如已做生成，则把每题指标回写到预测文件
+        if run_generation:
+            with open(pred_file, "w", encoding="utf-8") as f:
+                json.dump(records_with_metrics, f, ensure_ascii=False, indent=2)
+
+        detailed_payload = {
+            "overall_metrics": {
+                "EM": summary.get("EM", 0.0),
+                "F1": summary.get("F1", 0.0),
+                "Count": summary.get("Count", 0),
+                "FActScore": summary.get("FActScore"),
+            },
+            "items": records_with_metrics,
+        }
+        with open(detailed_file, "w", encoding="utf-8") as f:
+            json.dump(detailed_payload, f, ensure_ascii=False, indent=2)
+
+        print("\n" + "=" * 60)
+        print("🏆 离线生成评估报告")
+        print(f"🔹 样本数: {summary.get('Count', 0)}")
+        print(f"🔹 Exact Match (EM): {summary.get('EM', 0.0):.2f}%")
+        print(f"🔹 Token F1 Score:   {summary.get('F1', 0.0):.2f}%")
+        if "FActScore" in summary:
+            print(f"🔹 FActScore (Faithfulness): {summary['FActScore']:.2f}%")
+        print("=" * 60 + "\n")
+
+    with open(summary_file, "w", encoding="utf-8") as f:
+        json.dump(summary, f, ensure_ascii=False, indent=2)
+    print(f"✅ 评估摘要已保存: {summary_file}")
+
+    return summary
+
+
+def _build_cli_args():
+    parser = argparse.ArgumentParser(description="离线检索结果驱动的 RAG 生成与评估")
+    parser.add_argument("--mode", type=str, default="both", choices=["generate", "evaluate", "both"], help="运行模式")
+    parser.add_argument("--offline_file", type=str, default="data/test_knowledge.json", help="离线检索结果文件")
+    parser.add_argument("--sample_size", type=int, default=50, help="样本数（0 表示全部）")
+    parser.add_argument("--shuffle", action="store_true", help="是否先打乱样本")
+
+    parser.add_argument("--output_dir", type=str, default="results", help="输出目录")
+    parser.add_argument("--output_prefix", type=str, default="offline_test_knowledge", help="输出文件前缀")
+
+    # 生成参数
+    parser.add_argument("--gen_model", type=str, default=None, help="生成模型（API 模式默认使用 config 中 provider 对应模型）")
+    parser.add_argument("--use_api", action="store_true", help="是否通过 API 调用模型（默认会自动启用 API）")
+    parser.add_argument("--use_local", action="store_true", help="强制使用本地模型，不走 API")
+    parser.add_argument("--api_provider", type=str, default=None, help="API 提供商名称，优先读取 config.API_CONFIG")
+    parser.add_argument("--api_key", type=str, default=None, help="API Key")
+    parser.add_argument("--api_base_url", type=str, default=None, help="API Base URL")
+    parser.add_argument("--max_tokens", type=int, default=128, help="最大生成 token")
+    parser.add_argument("--temperature", type=float, default=0.1, help="采样温度")
+    parser.add_argument("--use_4bit", action="store_true", help="本地加载时启用 4bit 量化")
+
+    # knowledge 解析参数
+    parser.add_argument("--max_sources", type=int, default=8, help="从 knowledge 中提取的最大来源条数")
+    parser.add_argument("--max_chars_per_source", type=int, default=1200, help="每条来源最大字符数")
+
+    # 评估参数
+    parser.add_argument("--do_factscore", action="store_true", help="是否额外计算 LLM Judge 的 FactScore")
+
+    return parser.parse_args()
+
+
+if __name__ == "__main__":
+    args = _build_cli_args()
+
+    from generator import RAGGenerator
+    from config import API_CONFIG, DEFAULT_API_PROVIDER, DEFAULT_GEN_MODEL
+
+    need_generator = args.mode in {"generate", "both", "evaluate"}
+    generator = None
+    if need_generator:
+        # 默认优先走 config 里的 API；仅在显式 --use_local 时使用本地模型
+        resolved_use_api = (not args.use_local) or args.use_api
+
+        resolved_model_name = args.gen_model
+        resolved_api_key = args.api_key
+        resolved_api_base_url = args.api_base_url
+
+        if resolved_use_api:
+            provider = args.api_provider or DEFAULT_API_PROVIDER
+            if provider not in API_CONFIG:
+                raise ValueError(f"未在 config.API_CONFIG 中找到提供商: {provider}")
+            cfg = API_CONFIG[provider]
+            resolved_model_name = resolved_model_name or cfg.get("model") or DEFAULT_GEN_MODEL
+            resolved_api_key = resolved_api_key or cfg.get("api_key")
+            resolved_api_base_url = resolved_api_base_url or cfg.get("base_url")
+            print(f"[*] 使用 config API 提供商: {provider} | 模型: {resolved_model_name}")
+        else:
+            resolved_model_name = resolved_model_name or DEFAULT_GEN_MODEL
+
+        generator = RAGGenerator(
+            model_name=resolved_model_name,
+            use_api=resolved_use_api,
+            api_key=resolved_api_key,
+            api_base_url=resolved_api_base_url,
+            use_4bit=args.use_4bit,
+            max_tokens=args.max_tokens,
+            temperature=args.temperature,
+        )
+
+    if args.mode in {"generate", "both"}:
+        run_offline_generation_and_evaluation(
+            generator=generator,
+            offline_file=args.offline_file,
+            sample_size=args.sample_size,
+            output_dir=args.output_dir,
+            output_prefix=args.output_prefix,
+            max_tokens=args.max_tokens,
+            temperature=args.temperature,
+            max_sources=args.max_sources,
+            max_chars_per_source=args.max_chars_per_source,
+            run_generation=True,
+            run_evaluation=(args.mode == "both"),
+            do_factscore=args.do_factscore,
+            shuffle=args.shuffle,
+        )
+    else:
+        # evaluate-only: 若无 generated_answer，则会自动先生成再评估
+        summary = run_offline_generation_and_evaluation(
+            generator=generator,
+            offline_file=args.offline_file,
+            sample_size=args.sample_size,
+            output_dir=args.output_dir,
+            output_prefix=args.output_prefix,
+            run_generation=False,
+            run_evaluation=True,
+            do_factscore=False,
+            shuffle=args.shuffle,
+        )
+        print("\n📌 evaluate-only 结束。")
+        print(json.dumps(summary, ensure_ascii=False, indent=2))

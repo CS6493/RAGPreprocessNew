@@ -13,6 +13,5 @@ indexes
 .api_keys
 dataset
 results
-
 __pycache__
 *.pkl

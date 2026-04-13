@@ -1,8 +1,12 @@
 import torch
 import re
-from typing import List, Dict, Union, Optional
+from typing import List, Dict, Optional
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
-from openai import OpenAI  # 用于兼容大部分标准大模型 API 调用
+
+try:
+    from openai import OpenAI  # 用于兼容大部分标准大模型 API 调用
+except ImportError:
+    OpenAI = None
 
 class RAGGenerator:
     def __init__(
@@ -28,6 +32,8 @@ class RAGGenerator:
         self.temperature = temperature
         
         if self.use_api:
+            if OpenAI is None:
+                raise ImportError("use_api=True 需要安装 openai 库，请先执行: pip install openai")
             print(f"[*] 初始化 API 客户端模式 | 模型: {self.model_name}")
             # 现代的大模型服务（包括自建 vLLM）基本都支持基于 openai 库的调用
             self.client = OpenAI(api_key=api_key, base_url=api_base_url)
@@ -81,6 +87,48 @@ class RAGGenerator:
     def join_contexts(self, contexts: List[str]) -> str:
         return "\n\n".join([f"[Document {i}] {ctx}" for i, ctx in enumerate(contexts, start=1)])
 
+    def extract_sources_from_knowledge(
+        self,
+        knowledge: str,
+        max_sources: int = 8,
+        max_chars_per_source: int = 1200,
+    ) -> List[str]:
+        """从离线 knowledge 文本中提取 Sources 段落，转为可喂给生成模型的上下文列表。"""
+        if not knowledge:
+            return []
+
+        # 仅抓取 -----Sources----- 下方的 csv 代码块内容
+        sources_match = re.search(
+            r"-----Sources-----\s*```csv\s*(.*?)\s*```",
+            str(knowledge),
+            flags=re.DOTALL,
+        )
+        if not sources_match:
+            return [str(knowledge).strip()[:max_chars_per_source]]
+
+        raw_csv = sources_match.group(1).strip()
+        lines = [ln for ln in raw_csv.splitlines() if ln.strip()]
+        if len(lines) <= 1:
+            return [str(knowledge).strip()[:max_chars_per_source]]
+
+        contexts: List[str] = []
+        for line in lines[1:]:  # 跳过表头: id,\tcontent
+            if ",\t" in line:
+                _, content = line.split(",\t", 1)
+            elif "," in line:
+                _, content = line.split(",", 1)
+            else:
+                content = line
+
+            cleaned = content.strip().strip('"')
+            if not cleaned:
+                continue
+            contexts.append(cleaned[:max_chars_per_source])
+            if len(contexts) >= max_sources:
+                break
+
+        return contexts if contexts else [str(knowledge).strip()[:max_chars_per_source]]
+
     def build_instruct_messages(self, question: str, contexts: List[str]) -> List[Dict[str, str]]:
         """构建 Instruct 模型标准的 Chat 消息数组"""
         context_block = self.join_contexts(contexts)
@@ -114,23 +162,29 @@ class RAGGenerator:
         """接收问题和相关文档列表，生成回答"""
         max_tokens = max_tokens or self.max_tokens
         temperature = temperature or self.temperature
-        
-        # 将多个 chunk 的文本拼接为一个长字符串
-        context_str = "\n\n".join([f"[Document {i+1}]: {text}" for i, text in enumerate(contexts)])
-        
-        # 组装 Prompt
-        system_prompt = "You are an expert Q&A assistant. Answer the question based ONLY on the provided evidence. If the evidence is insufficient, say 'Insufficient evidence.'"
-        user_prompt = f"Contexts:\n{context_str}\n\nQuestion: {question}\n\nAnswer (concise):"
-        
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt}
-        ]
+
+        messages = self.build_instruct_messages(question=question, contexts=contexts)
         
         if self.use_api:
             return self._generate_api(messages, max_tokens, temperature)
         else:
             return self._generate_local(messages, max_tokens, temperature)
+
+    def generate_from_knowledge(
+        self,
+        question: str,
+        knowledge: str,
+        max_tokens: int = None,
+        temperature: float = None,
+    ) -> str:
+        """严格使用完整 knowledge 字段作为证据，不做回退或额外替换。"""
+        contexts = [str(knowledge).strip()]
+        return self.generate(
+            question=question,
+            contexts=contexts,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
 
 
     def _generate_api(self, messages, max_tokens, temperature) -> str:
