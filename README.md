@@ -206,60 +206,56 @@ python test.py
 - 增加检索质量指标（Recall@k、MRR）
 - 增加单元测试与端到端回归测试
 
-
+## 指令示例
 
 处理 FinanceBench 数据集并修改分块参数：
-
-Bash
 python main.py --dataset FinanceBench --chunk_size 1024 --chunk_overlap 100 --max_samples 500
+
 处理 HotpotQA 数据集并修改批处理大小：
-
-Bash
 python main.py --dataset HotpotQA --batch_size 16
-跳过数据构建阶段，直接对 Natural_Questions 进行检索测试：
 
-Bash
+跳过数据构建阶段，直接对 Natural_Questions 进行检索测试：
 python main.py --dataset Natural_Questions --chunk_size 512 --skip_pipeline --query "What is the capital of France?"
 
 测试一：只测试 BM25 稀疏检索的性能
-
-Bash
 python main.py --dataset PubMedQA --skip_pipeline --retrieval_method sparse --run_eval --eval_samples 200
+
 测试二：只测试 Contriever 稠密检索的性能
-
-Bash
 python main.py --dataset PubMedQA --skip_pipeline --retrieval_method dense --run_eval --eval_samples 200
-
 
 场景 1：端到端完整运行（预处理 + 建库 + 默认单条测试）
 如果你刚下载了一个新的数据集（比如 PubMedQA），想要从零开始清洗数据、分块、生成 Embedding、构建 FAISS 和 BM25 索引，并最后跑一个简单的测试：
-
-Bash
 python main.py --dataset PubMedQA --chunk_size 512 --chunk_overlap 50
 提示：如果不指定 --max_samples，默认可能会截取前 1000 条（取决于你的 default 设置），如果想跑全量数据可以加上 --max_samples 0。
 
 场景 2：跳过预处理，直接进行单条交互式检索测试
 如果你已经建好库了，只是修改了检索逻辑（比如从 dense 改成了 hybrid），想要快速验证一下检索结果，不需要重新建库：
-
-Bash
 python main.py --dataset HotpotQA --skip_pipeline --retrieval_method hybrid
 说明：--skip_pipeline 会跳过耗时的阶段 1、2、3，直接加载之前保存的索引并进入测试模式。
 
 场景 3：跳过预处理，运行批量文件检索（你刚刚尝试的场景）
 如果你已经准备好了一个 JSON 文件包含大量问题，想要批量检索并保存结果：
-
-Bash
 python main.py --dataset HotpotQA --skip_pipeline --query_file data/queries.json --retrieval_method hybrid --batch_size_queries 50
+
 场景 4：针对自有数据集的内部评估模式 (Recall@K)
 如果你的数据集中本身带有 Ground Truth 答案/ID，想要评估当前检索方法的召回率（假设你代码里写了 --run_eval 分支）：
-
-Bash
 python main.py --dataset FinanceBench --skip_pipeline --run_eval --eval_samples 100 --retrieval_method dense
 说明：这会随机抽取 100 个问题，跑一遍 Dense 检索，并统计准确命中的召回率。
 
 场景 5：使用不同的切分策略建库以对比效果
 想要测试更小的 Chunk Size 对 RAG 效果的影响：
-
-Bash
 python main.py --dataset Natural_Questions --chunk_size 256 --chunk_overlap 20 --max_samples 5000
 说明：这会在 output_dir 下生成带有新参数标识（如 cs256_co20）的新索引文件，不会覆盖之前的 cs512 版本。
+
+## Startup
+1. conda create -y -n cs6493rag python=3.10
+2. conda activate cs6493
+3. pip install -r requirements.txt
+4. 单独运行预处理（每个数据集默认提取1000个，可以通过max-sample参数修改样本数）: 
+python main --dataset HotpotQA --max-sample 1000 --batch_size 8
+python main --dataset Natural_Questions --max-sample 1000 --batch_size 16
+python main --dataset PubMedQA --max-sample 1000 --batch_size 32
+python main --dataset FinanceBench --max-sample 1000 --batch_size 8
+5. 其他指令场景见指令示例
+6. 运行UI界面：streamlit run app.py (需要先运行过预处理阶段，见4)
+
