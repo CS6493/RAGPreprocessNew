@@ -13,7 +13,7 @@ from config import DEFAULT_GENERATION_OUTPUT_DIR
 
 def evaluate_retrieval(retriever, dataset_name, top_k=3, method="hybrid", sample_size=100):
     """
-    评估检索系统的 Recall@K
+    评估检索系统: 包括 Recall@K, NDCG@K, MRR 等指标
     """
     print(f"\n📊 开始执行评估 (Dataset: {dataset_name} | Method: {method} | Top-K: {top_k})")
     
@@ -40,8 +40,10 @@ def evaluate_retrieval(retriever, dataset_name, top_k=3, method="hybrid", sample
         test_queries = all_queries
 
     hit_count = 0
+    ndcg_total = 0.0
+    mrr_total = 0.0
     
-    # 3. 执行批量检索并统计召回率
+    # 3. 执行批量检索并统计指标
     for q in tqdm(test_queries, desc="Evaluating"):
         ground_truth_id = unique_queries[q]["doc_id"]
         
@@ -50,7 +52,7 @@ def evaluate_retrieval(retriever, dataset_name, top_k=3, method="hybrid", sample
         
         results, _ = retriever.search(query=q, top_k=top_k, method=method)
         
-        # 判断 Ground Truth 是否在召回的 Top-K 块中
+        # 计算 Recall@K
         is_hit = False
         for res in results:
             retrieved_meta = res["meta_info"]
@@ -61,17 +63,36 @@ def evaluate_retrieval(retriever, dataset_name, top_k=3, method="hybrid", sample
                 
         if is_hit:
             hit_count += 1
+        
+        # 计算 NDCG@K
+        ndcg_k = ndcg_at_k(ground_truth_id, results)
+        if ndcg_k is not None:
+            ndcg_total += ndcg_k
+        
+        # 计算 MRR
+        mrr_k = mrr(ground_truth_id, results)
+        if mrr_k is not None:
+            mrr_total += mrr_k
 
     recall = (hit_count / len(test_queries)) * 100
+    ndcg_avg = (ndcg_total / len(test_queries)) * 100 if len(test_queries) > 0 else 0.0
+    mrr_avg = (mrr_total / len(test_queries)) * 100 if len(test_queries) > 0 else 0.0
+    
     print("\n" + "="*50)
     print(f"📈 评估结果报告")
     print(f"🔹 数据集: {dataset_name}")
     print(f"🔹 检索策略: {method.upper()}")
     print(f"🔹 测试样本数: {len(test_queries)}")
     print(f"🔹 Recall@{top_k}: {recall:.2f}% ({hit_count}/{len(test_queries)})")
+    print(f"🔹 NDCG@{top_k}: {ndcg_avg:.2f}%")
+    print(f"🔹 MRR: {mrr_avg:.2f}%")
     print("="*50 + "\n")
     
-    return recall
+    return {
+        "recall": recall,
+        "ndcg": ndcg_avg,
+        "mrr": mrr_avg,
+    }
 
 
 # ===================== 生成指标评估 (Generation Eval) =====================
@@ -104,6 +125,101 @@ def f1_score(prediction, ground_truth):
     recall = 1.0 * num_same / len(truth_tokens)
     f1 = (2 * precision * recall) / (precision + recall)
     return f1
+
+def recall_at_k(gold_source_id, retrieved_results):
+    """
+    计算 Recall@K: 检查金标答案对应的文档是否在前K个检索结果中
+    Args:
+        gold_source_id: 金标文档的source_id
+        retrieved_results: 检索结果列表
+    Returns:
+        1 if recall hit else 0
+    """
+    if not gold_source_id:
+        return None
+    
+    for result in retrieved_results:
+        retrieved_source_id = result.get("meta_info", {}).get("source_id", "")
+        if str(retrieved_source_id).strip() == str(gold_source_id).strip():
+            return 1
+    return 0
+
+def max_normalized_f1(gold_answer, retrieved_results):
+    """
+    计算 Max-Normalized F1: 处理chunk大小不一的情况
+    取前K个检索结果中与金标答案F1分数最高的那个
+    Args:
+        gold_answer: 金标答案文本
+        retrieved_results: 检索结果列表
+    Returns:
+        max F1 score among all retrieved results
+    """
+    if not gold_answer or not retrieved_results:
+        return None
+    
+    max_f1 = 0.0
+    for result in retrieved_results:
+        answer_text = result.get("meta_info", {}).get("answer", "")
+        if answer_text:
+            current_f1 = f1_score(answer_text, gold_answer)
+            max_f1 = max(max_f1, current_f1)
+    
+    return max_f1
+
+def ndcg_at_k(gold_source_id, retrieved_results):
+    """
+    计算 NDCG@K (Normalized Discounted Cumulative Gain)
+    假设相关性为二元: 1 if 文档匹配gold_source_id, 0 otherwise
+    Args:
+        gold_source_id: 金标文档ID
+        retrieved_results: 检索结果列表 (按排名排序)
+    Returns:
+        NDCG@K score (0.0 - 1.0)
+    """
+    if not gold_source_id:
+        return None
+    
+    # 构建相关性标签
+    relevance = []
+    for result in retrieved_results:
+        retrieved_source_id = result.get("meta_info", {}).get("source_id", "")
+        is_relevant = 1 if str(retrieved_source_id).strip() == str(gold_source_id).strip() else 0
+        relevance.append(is_relevant)
+    
+    # 计算 DCG
+    dcg = 0.0
+    for i, rel in enumerate(relevance):
+        if rel > 0:
+            dcg += rel / (2 ** (i + 1))  # log2(i+2) = log2(rank+1)
+    
+    # 计算 IDCG (理想DCG，第一个result相关)
+    idcg = 1.0 / 1.0  # 第一个result如果相关，IDCG = 1 / (2^1) = 0.5, 但理想情况是1.0
+    if len(relevance) > 0:
+        idcg = sum(1.0 / (2 ** (i + 1)) for i in range(1) if i < len(relevance))
+    
+    # NDCG = DCG / IDCG
+    ndcg = (dcg / idcg) if idcg > 0 else 0.0
+    
+    return min(ndcg, 1.0)
+
+def mrr(gold_source_id, retrieved_results):
+    """
+    计算 MRR (Mean Reciprocal Rank): 第一个相关文档的倒数排名
+    Args:
+        gold_source_id: 金标文档ID
+        retrieved_results: 检索结果列表
+    Returns:
+        1/rank if found, 0 if not found
+    """
+    if not gold_source_id:
+        return None
+    
+    for rank, result in enumerate(retrieved_results, start=1):
+        retrieved_source_id = result.get("meta_info", {}).get("source_id", "")
+        if str(retrieved_source_id).strip() == str(gold_source_id).strip():
+            return 1.0 / rank
+    
+    return 0.0
 
 def calculate_fact_score_via_llm(prediction, contexts, generator):
     """
@@ -332,6 +448,9 @@ def run_generation_from_retrieval_output(
                     "retrieval_method": item.get("retrieval_method"),
                     "top_k": item.get("top_k"),
                     "hit_at_k": item.get("hit_at_k"),
+                    "recall_at_k": item.get("recall_at_k"),
+                    "ndcg_at_k": item.get("ndcg_at_k"),
+                    "mrr": item.get("mrr"),
                     "top1_answer": item.get("top1_answer"),
                 },
             }

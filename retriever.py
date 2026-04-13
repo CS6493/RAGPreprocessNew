@@ -9,7 +9,7 @@ import faiss
 from transformers import AutoTokenizer, AutoModel, T5ForConditionalGeneration
 
 from utils import get_embeddings, rewrite_query
-from evaluation import exact_match_score, f1_score
+from evaluation import exact_match_score, f1_score, recall_at_k, max_normalized_f1, ndcg_at_k, mrr
 from config import (
     DATASETS_CONFIG,
     DEFAULT_CHUNK_OVERLAP,
@@ -182,6 +182,10 @@ def run_batch_retrieval(
     hit_total = 0
     em_total = 0
     f1_total = 0.0
+    recall_total = 0
+    max_f1_total = 0.0
+    ndcg_total = 0.0
+    mrr_total = 0.0
 
     retriever.mock = True
     for item in queries:
@@ -200,10 +204,22 @@ def run_batch_retrieval(
         if results:
             top1_answer = str(_extract_answer(results[0].get("meta_info", {}))).strip()
 
+        # 计算检索指标
         hit_at_k = None
+        recall_k = None
+        max_f1 = None
+        ndcg_k = None
+        mrr_k = None
+        
         if gold_source_id:
             hit_at_k = int(any(str(r.get("meta_info", {}).get("source_id", "")).strip() == gold_source_id for r in results))
             hit_total += hit_at_k
+            recall_k = recall_at_k(gold_source_id, results)
+            recall_total += (recall_k if recall_k is not None else 0)
+            ndcg_k = ndcg_at_k(gold_source_id, results)
+            ndcg_total += (ndcg_k if ndcg_k is not None else 0.0)
+            mrr_k = mrr(gold_source_id, results)
+            mrr_total += (mrr_k if mrr_k is not None else 0.0)
 
         top1_em = None
         top1_f1 = None
@@ -212,6 +228,8 @@ def run_batch_retrieval(
             top1_f1 = float(f1_score(top1_answer, gold_answer))
             em_total += top1_em
             f1_total += top1_f1
+            max_f1 = max_normalized_f1(gold_answer, results)
+            max_f1_total += (max_f1 if max_f1 is not None else 0.0)
             evaluated_count += 1
 
         record = {
@@ -222,7 +240,11 @@ def run_batch_retrieval(
             "top1_answer": top1_answer,
             "top1_em": top1_em,
             "top1_f1": top1_f1,
+            "max_normalized_f1": max_f1,
             "hit_at_k": hit_at_k,
+            "recall_at_k": recall_k,
+            "ndcg_at_k": ndcg_k,
+            "mrr": mrr_k,
             "top_k": top_k,
             "retrieval_method": method,
             "retrieved_results": results,
@@ -248,10 +270,14 @@ def run_batch_retrieval(
     if evaluated_count > 0:
         summary["Top1_EM"] = (em_total / evaluated_count) * 100
         summary["Top1_F1"] = (f1_total / evaluated_count) * 100
+        summary["Max_Normalized_F1"] = (max_f1_total / evaluated_count) * 100
 
     hit_eval_count = sum(1 for x in records if x.get("hit_at_k") is not None)
     if hit_eval_count > 0:
         summary["Hit@K"] = (hit_total / hit_eval_count) * 100
+        summary["Recall@K"] = (recall_total / hit_eval_count) * 100
+        summary["NDCG@K"] = (ndcg_total / hit_eval_count) * 100
+        summary["MRR"] = (mrr_total / hit_eval_count) * 100
         summary["hit_evaluated_count"] = hit_eval_count
 
     with open(summary_file, "w", encoding="utf-8") as f:
@@ -263,8 +289,12 @@ def run_batch_retrieval(
     if "Top1_EM" in summary:
         print(f"🔹 Top1 EM: {summary['Top1_EM']:.2f}%")
         print(f"🔹 Top1 F1: {summary['Top1_F1']:.2f}%")
+        print(f"🔹 Max-Normalized F1: {summary['Max_Normalized_F1']:.2f}%")
     if "Hit@K" in summary:
         print(f"🔹 Hit@{top_k}: {summary['Hit@K']:.2f}%")
+        print(f"🔹 Recall@{top_k}: {summary['Recall@K']:.2f}%")
+        print(f"🔹 NDCG@{top_k}: {summary['NDCG@K']:.2f}%")
+        print(f"🔹 MRR: {summary['MRR']:.2f}%")
     print(f"🔹 明细文件: {detailed_file}")
     print(f"🔹 摘要文件: {summary_file}")
     print("=" * 60 + "\n")
