@@ -1,63 +1,127 @@
 import torch
-import re
-from typing import List, Dict, Union, Optional
-from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
-from openai import OpenAI  # 用于兼容大部分标准大模型 API 调用
+from typing import Any, Dict, List, Optional
+
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+try:
+    from transformers import BitsAndBytesConfig
+except Exception:  # pragma: no cover
+    BitsAndBytesConfig = None
+
+from openai import OpenAI
+
+from generation_utils import (
+    build_base_fallback_prompt,
+    build_base_prompt,
+    build_chat_messages,
+    candidate_answer_score,
+    clear_memory,
+    detect_question_type,
+    extract_answer_from_instruct_output,
+    extract_final_answer,
+    is_abstention,
+    prepare_contexts_for_question,
+)
+
 
 class RAGGenerator:
+    """
+    Local-first generation module that directly integrates the prompt design and
+    context-compression logic from the final project notebooks.
+    """
+
     def __init__(
         self,
-        model_name: str = "Qwen/Qwen2.5-7B-Instruct",
+        model_name: str = "Qwen/Qwen2.5-7B",
+        generation_mode: str = "base",
         use_api: bool = False,
         api_key: Optional[str] = None,
         api_base_url: Optional[str] = None,
         use_4bit: bool = True,
+        force_cpu: bool = False,
         device_map: str = "auto",
-        max_tokens: int = 128,
-        temperature: float = 0.1
+        max_new_tokens: int = 96,
+        temperature: float = 0.0,
+        do_sample: bool = False,
+        repetition_penalty: float = 1.05,
+        no_repeat_ngram_size: int = 4,
+        use_context_compression: bool = True,
+        top_k_contexts: int = 3,
+        max_total_context_chars: int = 3200,
+        max_sentences_per_context: int = 2,
+        use_fallback_prompt: bool = True,
+        trust_remote_code: bool = True,
     ):
-        """
-        初始化生成模块。
-        :param use_api: 如果为 True，则不下载模型，而是调用 API（适合跑较大模型或节省显存）。
-        :param api_key, api_base_url: 使用 API 时必填，支持兼容 OpenAI SDK 的任意服务商。
-        :param use_4bit: 本地加载时是否使用原有逻辑进行 4-bit 量化。
-        """
         self.model_name = model_name
+        self.generation_mode = generation_mode
         self.use_api = use_api
-        self.max_tokens = max_tokens
+        self.max_new_tokens = max_new_tokens
         self.temperature = temperature
-        
+        self.do_sample = do_sample
+        self.repetition_penalty = repetition_penalty
+        self.no_repeat_ngram_size = no_repeat_ngram_size
+        self.use_context_compression = use_context_compression
+        self.top_k_contexts = top_k_contexts
+        self.max_total_context_chars = max_total_context_chars
+        self.max_sentences_per_context = max_sentences_per_context
+        self.use_fallback_prompt = use_fallback_prompt
+        self.force_cpu = force_cpu
+        self.device_map = device_map
+        self.use_4bit = use_4bit
+        self.trust_remote_code = trust_remote_code
+
+        self.client = None
+        self.model = None
+        self.tokenizer = None
+
         if self.use_api:
-            print(f"[*] 初始化 API 客户端模式 | 模型: {self.model_name}")
-            # 现代的大模型服务（包括自建 vLLM）基本都支持基于 openai 库的调用
             self.client = OpenAI(api_key=api_key, base_url=api_base_url)
-            self.model = None
-            self.tokenizer = None
         else:
-            print(f"[*] 初始化本地权重加载模式 | 模型: {self.model_name}")
-            self._load_local_model(use_4bit, device_map)
+            self._load_local_model()
 
-    def _load_local_model(self, use_4bit: bool, device_map: str):
-        """保留原 notebook 中的 4-bit 量化加载逻辑"""
-        # 判断设备的混合精度支持能力
-        compute_dtype = torch.bfloat16 if torch.cuda.is_available() and torch.cuda.get_device_capability(0)[0] >= 8 else torch.float16
-        
-        quant_config = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_quant_type="nf4",
-            bnb_4bit_use_double_quant=True,
-            bnb_4bit_compute_dtype=compute_dtype,
-        ) if use_4bit and torch.cuda.is_available() else None
+    def _pick_compute_dtype(self):
+        if not torch.cuda.is_available() or self.force_cpu:
+            return torch.float32
+        major, _ = torch.cuda.get_device_capability(0)
+        return torch.bfloat16 if major >= 8 else torch.float16
 
-        model_kwargs = {"low_cpu_mem_usage": True, "device_map": device_map}
-        if quant_config:
+    def _make_quantization_config(self):
+        if not self.use_4bit or not torch.cuda.is_available() or self.force_cpu or BitsAndBytesConfig is None:
+            return None
+        try:
+            return BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_quant_type="nf4",
+                bnb_4bit_use_double_quant=True,
+                bnb_4bit_compute_dtype=self._pick_compute_dtype(),
+            )
+        except Exception:
+            return None
+
+    def _load_local_model(self):
+        clear_memory()
+        quant_config = self._make_quantization_config()
+        compute_dtype = self._pick_compute_dtype()
+
+        model_kwargs: Dict[str, Any] = {
+            "low_cpu_mem_usage": True,
+            "trust_remote_code": self.trust_remote_code,
+        }
+
+        if quant_config is not None:
             model_kwargs["quantization_config"] = quant_config
-        elif torch.cuda.is_available():
+            model_kwargs["device_map"] = self.device_map
+        elif torch.cuda.is_available() and not self.force_cpu:
             model_kwargs["torch_dtype"] = compute_dtype
+            model_kwargs["device_map"] = self.device_map
         else:
             model_kwargs["torch_dtype"] = torch.float32
 
-        self.tokenizer = AutoTokenizer.from_pretrained(self.model_name, use_fast=True)
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            self.model_name,
+            use_fast=True,
+            trust_remote_code=self.trust_remote_code,
+        )
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
         self.tokenizer.padding_side = "left"
@@ -65,104 +129,151 @@ class RAGGenerator:
         self.model = AutoModelForCausalLM.from_pretrained(self.model_name, **model_kwargs)
         self.model.eval()
 
-    # ================= 原有上下文处理与 Prompt 构建逻辑 =================
-    
-    def detect_question_type(self, question: str) -> str:
-        """保留原有的问题类型侦测机制，用于约束回答格式"""
-        q = str(question).strip().lower()
-        starters = ("is ", "are ", "was ", "were ", "do ", "does ", "did ", "has ", "have ", "had ", "can ", "could ", "will ", "would ")
-        if q.startswith(starters): return "yes_no"
-        if q.startswith("who"): return "who"
-        if q.startswith("when") or "what year" in q: return "when"
-        if q.startswith("where"): return "where"
-        if "how many" in q or "how much" in q: return "numeric"
-        return "span"
-
-    def join_contexts(self, contexts: List[str]) -> str:
-        return "\n\n".join([f"[Document {i}] {ctx}" for i, ctx in enumerate(contexts, start=1)])
-
-    def build_instruct_messages(self, question: str, contexts: List[str]) -> List[Dict[str, str]]:
-        """构建 Instruct 模型标准的 Chat 消息数组"""
-        context_block = self.join_contexts(contexts)
-        qtype = self.detect_question_type(question)
-        
-        # 原逻辑：依据问题类型注入不同的格式要求
-        if qtype == "yes_no":
-            answer_rule = "If the evidence supports yes/no, answer with exactly yes or no."
-        else:
-            answer_rule = "Return the shortest direct answer phrase, not a long explanation."
-
-        return [
-            {
-                "role": "system",
-                "content": (
-                    "You are a careful question answering assistant. "
-                    "Use only the retrieved evidence. Do not use outside knowledge. "
-                    "If the evidence is insufficient, reply exactly: Insufficient evidence. "
-                    + answer_rule
-                ),
-            },
-            {
-                "role": "user",
-                "content": f"Question: {question}\n\nRetrieved evidence:\n{context_block}\n\nReturn a very concise final answer."
-            }
-        ]
-
-    # ================= 核心生成推断逻辑 (自动分发本地与API) =================
-
-    def generate(self, question: str, contexts: List[str], max_tokens: int = None, temperature: float = None) -> str:
-        """接收问题和相关文档列表，生成回答"""
-        max_tokens = max_tokens or self.max_tokens
-        temperature = temperature or self.temperature
-        
-        # 将多个 chunk 的文本拼接为一个长字符串
-        context_str = "\n\n".join([f"[Document {i+1}]: {text}" for i, text in enumerate(contexts)])
-        
-        # 组装 Prompt
-        system_prompt = "You are an expert Q&A assistant. Answer the question based ONLY on the provided evidence. If the evidence is insufficient, say 'Insufficient evidence.'"
-        user_prompt = f"Contexts:\n{context_str}\n\nQuestion: {question}\n\nAnswer (concise):"
-        
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt}
-        ]
-        
-        if self.use_api:
-            return self._generate_api(messages, max_tokens, temperature)
-        else:
-            return self._generate_local(messages, max_tokens, temperature)
-
-
-    def _generate_api(self, messages, max_tokens, temperature) -> str:
+    def unload(self):
         try:
-            response = self.client.chat.completions.create(
-                model=self.model_name,
-                messages=messages,
-                max_tokens=max_tokens,
-                temperature=temperature,
-            )
-            return response.choices[0].message.content.strip()
-        except Exception as e:
-            return f"API Error: {str(e)}"
+            del self.model
+        except Exception:
+            pass
+        try:
+            del self.tokenizer
+        except Exception:
+            pass
+        self.model = None
+        self.tokenizer = None
+        clear_memory()
+
+    def get_inference_device(self) -> str:
+        if torch.cuda.is_available() and not self.force_cpu:
+            return "cuda"
+        return "cpu"
+
+    def prepare_contexts(self, question: str, contexts: List[str]) -> List[str]:
+        return prepare_contexts_for_question(
+            question=question,
+            contexts=contexts,
+            top_k=self.top_k_contexts,
+            max_total_chars=self.max_total_context_chars,
+            max_sentences_per_context=self.max_sentences_per_context,
+            use_context_compression=self.use_context_compression,
+        )
 
     @torch.inference_mode()
-    def _generate_local(self, messages: List[Dict[str, str]], max_new_tokens: int, temperature: float) -> str:
-        """保持原有的基于 HuggingFace Transformers 的推理流程"""
-        # 使用模型的默认 chat 模板将格式转化为单段字符串提示词
-        prompt = self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-        inputs = self.tokenizer(prompt, return_tensors="pt").to(self.model.device)
-        
-        gen_kwargs = {
-            "max_new_tokens": max_new_tokens,
-            "do_sample": temperature > 0,
-            "pad_token_id": self.tokenizer.pad_token_id,
+    def _generate_local_plain(self, prompt: str) -> str:
+        device = self.get_inference_device()
+        inputs = self.tokenizer(prompt, return_tensors="pt")
+        inputs = {k: v.to(device) for k, v in inputs.items()}
+        input_len = inputs["input_ids"].shape[1]
+
+        gen_kwargs = dict(
+            max_new_tokens=self.max_new_tokens,
+            do_sample=self.do_sample,
+            repetition_penalty=self.repetition_penalty,
+            no_repeat_ngram_size=self.no_repeat_ngram_size,
+            pad_token_id=self.tokenizer.eos_token_id,
+        )
+        if self.do_sample:
+            gen_kwargs["temperature"] = self.temperature
+
+        generated = self.model.generate(
+            **inputs,
+            **gen_kwargs,
+        )
+        output_ids = generated[0][input_len:]
+        return self.tokenizer.decode(output_ids, skip_special_tokens=True).strip()
+
+    @torch.inference_mode()
+    def _generate_local_chat(self, messages: List[Dict[str, str]]) -> str:
+        device = self.get_inference_device()
+        if hasattr(self.tokenizer, "apply_chat_template"):
+            inputs = self.tokenizer.apply_chat_template(
+                messages,
+                tokenize=True,
+                add_generation_prompt=True,
+                return_tensors="pt",
+                return_dict=True,
+            )
+        else:
+            prompt = "\n\n".join([f"{m['role'].upper()}: {m['content']}" for m in messages]) + "\n\nASSISTANT:"
+            inputs = self.tokenizer(prompt, return_tensors="pt")
+
+        inputs = {k: v.to(device) for k, v in inputs.items()}
+        input_len = inputs["input_ids"].shape[1]
+
+        gen_kwargs = dict(
+            max_new_tokens=self.max_new_tokens,
+            do_sample=self.do_sample,
+            repetition_penalty=self.repetition_penalty,
+            no_repeat_ngram_size=self.no_repeat_ngram_size,
+            pad_token_id=self.tokenizer.eos_token_id,
+        )
+        if self.do_sample:
+            gen_kwargs["temperature"] = self.temperature
+
+        generated = self.model.generate(
+            **inputs,
+            **gen_kwargs,
+        )
+        output_ids = generated[0][input_len:]
+        return self.tokenizer.decode(output_ids, skip_special_tokens=True).strip()
+
+    def _generate_api_chat(self, messages: List[Dict[str, str]]) -> str:
+        response = self.client.chat.completions.create(
+            model=self.model_name,
+            messages=messages,
+            max_tokens=self.max_new_tokens,
+            temperature=self.temperature,
+        )
+        return response.choices[0].message.content.strip()
+
+    def _run_primary(self, question: str, prepared_contexts: List[str]) -> Dict[str, Any]:
+        if self.generation_mode == "base":
+            prompt = build_base_prompt(question, prepared_contexts)
+            raw = self._generate_api_chat([{"role": "user", "content": prompt}]) if self.use_api else self._generate_local_plain(prompt)
+            pred = extract_final_answer(raw, question)
+        elif self.generation_mode == "instruct":
+            messages = build_chat_messages(question, prepared_contexts, fallback=False)
+            raw = self._generate_api_chat(messages) if self.use_api else self._generate_local_chat(messages)
+            pred = extract_answer_from_instruct_output(raw, question)
+        else:
+            raise ValueError("generation_mode must be 'base' or 'instruct'")
+
+        return {
+            "raw_output": raw,
+            "prediction": pred,
+            "heuristic_score": candidate_answer_score(pred, question, prepared_contexts),
+            "prompt_variant": "primary",
         }
-        if temperature > 0:
-            gen_kwargs["temperature"] = temperature
-            
-        outputs = self.model.generate(**inputs, **gen_kwargs)
-        
-        # 截断 Prompt，仅获取新生成的答案部分
-        input_length = inputs.input_ids.shape[1]
-        generated_tokens = outputs[0][input_length:]
-        return self.tokenizer.decode(generated_tokens, skip_special_tokens=True).strip()
+
+    def _run_fallback(self, question: str, prepared_contexts: List[str]) -> Dict[str, Any]:
+        if self.generation_mode == "base":
+            prompt = build_base_fallback_prompt(question, prepared_contexts)
+            raw = self._generate_api_chat([{"role": "user", "content": prompt}]) if self.use_api else self._generate_local_plain(prompt)
+            pred = extract_final_answer(raw, question)
+        else:
+            messages = build_chat_messages(question, prepared_contexts, fallback=True)
+            raw = self._generate_api_chat(messages) if self.use_api else self._generate_local_chat(messages)
+            pred = extract_answer_from_instruct_output(raw, question)
+
+        return {
+            "raw_output": raw,
+            "prediction": pred,
+            "heuristic_score": candidate_answer_score(pred, question, prepared_contexts),
+            "prompt_variant": "fallback",
+        }
+
+    def generate(self, question: str, contexts: List[str], return_debug: bool = False) -> Any:
+        prepared_contexts = self.prepare_contexts(question, contexts)
+        chosen = self._run_primary(question, prepared_contexts)
+
+        if self.use_fallback_prompt and (is_abstention(chosen["prediction"]) or chosen["heuristic_score"] < 0.55):
+            fallback = self._run_fallback(question, prepared_contexts)
+            if fallback["heuristic_score"] >= chosen["heuristic_score"]:
+                chosen = fallback
+
+        result = {
+            **chosen,
+            "prepared_contexts": prepared_contexts,
+            "question_type": detect_question_type(question),
+            "generation_mode": self.generation_mode,
+        }
+        return result if return_debug else result["prediction"]
