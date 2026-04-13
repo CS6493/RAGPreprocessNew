@@ -9,6 +9,8 @@ from collections import Counter
 from typing import Any, Dict, List, Optional
 from tqdm import tqdm
 
+from config import DEFAULT_GENERATION_OUTPUT_DIR
+
 def evaluate_retrieval(retriever, dataset_name, top_k=3, method="hybrid", sample_size=100):
     """
     评估检索系统的 Recall@K
@@ -213,6 +215,212 @@ def _extract_ground_truth(item: Dict[str, Any]) -> str:
     ).strip()
 
 
+def _extract_text_contexts_from_retrieval_results(
+    retrieved_results: List[Dict[str, Any]],
+    max_contexts: int = 5,
+    max_chars_per_context: int = 1200,
+) -> List[str]:
+    contexts: List[str] = []
+    for row in retrieved_results[:max_contexts]:
+        meta_info = row.get("meta_info", {})
+        txt = str(meta_info.get("text", "")).strip()
+        if not txt:
+            continue
+        contexts.append(txt[:max_chars_per_context])
+    return contexts
+
+
+def load_retrieval_output_data(
+    retrieval_file: str,
+    sample_size: int = 0,
+    shuffle: bool = False,
+) -> List[Dict[str, Any]]:
+    with open(retrieval_file, "r", encoding="utf-8") as f:
+        payload = json.load(f)
+
+    if isinstance(payload, dict):
+        data = payload.get("items") or payload.get("records") or []
+    elif isinstance(payload, list):
+        data = payload
+    else:
+        raise ValueError("retrieval_file 需要是 JSON 数组或包含 items/records 的对象")
+
+    valid = [x for x in data if str(x.get("question", "")).strip() and isinstance(x.get("retrieved_results", []), list)]
+
+    if shuffle:
+        random.shuffle(valid)
+    if sample_size > 0:
+        valid = valid[:sample_size]
+    return valid
+
+
+def run_generation_from_retrieval_output(
+    generator,
+    retrieval_file: str,
+    sample_size: int = 0,
+    output_dir: str = DEFAULT_GENERATION_OUTPUT_DIR,
+    output_prefix: str = "retrieve_generation",
+    max_tokens: Optional[int] = None,
+    temperature: Optional[float] = None,
+    max_contexts: int = 5,
+    max_chars_per_context: int = 1200,
+    do_factscore: bool = True,
+    shuffle: bool = False,
+) -> Dict[str, Any]:
+    os.makedirs(output_dir, exist_ok=True)
+    data = load_retrieval_output_data(retrieval_file=retrieval_file, sample_size=sample_size, shuffle=shuffle)
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    pred_file = os.path.join(output_dir, f"{output_prefix}_predictions_{timestamp}.json")
+    detailed_file = os.path.join(output_dir, f"{output_prefix}_detailed_{timestamp}.json")
+    summary_file = os.path.join(output_dir, f"{output_prefix}_summary_{timestamp}.json")
+
+    records: List[Dict[str, Any]] = []
+    em_total = 0
+    f1_total = 0.0
+    fact_total = 0
+    eval_count = 0
+
+    print(f"\n📦 已加载检索结果: {len(data)} 条 | 文件: {retrieval_file}")
+    print("🤖 开始基于检索结果生成答案...")
+
+    for item in tqdm(data, desc="Generate From Retrieval"):
+        question = str(item.get("question", "")).strip()
+        gold_answer = str(item.get("gold_answer") or item.get("answer") or "").strip()
+        retrieved_results = item.get("retrieved_results", [])
+
+        contexts = _extract_text_contexts_from_retrieval_results(
+            retrieved_results=retrieved_results,
+            max_contexts=max_contexts,
+            max_chars_per_context=max_chars_per_context,
+        )
+        knowledge_used = "\n\n".join(contexts)
+
+        pred = generator.generate(
+            question=question,
+            contexts=contexts,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+
+        em = None
+        f1 = None
+        if gold_answer:
+            em = int(exact_match_score(pred, gold_answer))
+            f1 = float(f1_score(pred, gold_answer))
+            em_total += em
+            f1_total += f1
+            eval_count += 1
+
+        fact = None
+        if do_factscore and pred and pred.lower() != "insufficient evidence.":
+            fact = int(calculate_fact_score_via_llm(pred, contexts if contexts else [knowledge_used], generator))
+            fact_total += fact
+
+        records.append(
+            {
+                "question": question,
+                "answer": gold_answer,
+                "generated_answer": pred,
+                "em": em,
+                "f1": f1,
+                "fact_score": fact,
+                "knowledge_used": knowledge_used,
+                "retrieved_results": retrieved_results,
+                "retrieval_meta": {
+                    "rewritten_query": item.get("rewritten_query"),
+                    "retrieval_method": item.get("retrieval_method"),
+                    "top_k": item.get("top_k"),
+                    "hit_at_k": item.get("hit_at_k"),
+                    "top1_answer": item.get("top1_answer"),
+                },
+            }
+        )
+
+    with open(pred_file, "w", encoding="utf-8") as f:
+        json.dump(records, f, ensure_ascii=False, indent=2)
+
+    summary: Dict[str, Any] = {
+        "retrieval_file": retrieval_file,
+        "sample_count": len(records),
+        "evaluated_count": eval_count,
+        "predictions_file": pred_file,
+        "detailed_file": detailed_file,
+    }
+    if eval_count > 0:
+        summary["EM"] = (em_total / eval_count) * 100
+        summary["F1"] = (f1_total / eval_count) * 100
+    if do_factscore and records:
+        summary["FActScore"] = (fact_total / len(records)) * 100
+
+    with open(detailed_file, "w", encoding="utf-8") as f:
+        json.dump({"overall_metrics": summary, "items": records}, f, ensure_ascii=False, indent=2)
+    with open(summary_file, "w", encoding="utf-8") as f:
+        json.dump(summary, f, ensure_ascii=False, indent=2)
+
+    print("\n" + "=" * 60)
+    print("🏆 基于检索结果的生成评估报告")
+    print(f"🔹 样本数: {len(records)}")
+    if "EM" in summary:
+        print(f"🔹 EM: {summary['EM']:.2f}%")
+        print(f"🔹 F1: {summary['F1']:.2f}%")
+    if "FActScore" in summary:
+        print(f"🔹 FActScore: {summary['FActScore']:.2f}%")
+    print(f"🔹 结果文件: {pred_file}")
+    print(f"🔹 摘要文件: {summary_file}")
+    print("=" * 60 + "\n")
+
+    return summary
+
+
+def evaluate_generated_predictions_file(
+    predictions_file: str,
+    output_dir: str = DEFAULT_GENERATION_OUTPUT_DIR,
+    output_prefix: str = "generated_eval",
+) -> Dict[str, Any]:
+    with open(predictions_file, "r", encoding="utf-8") as f:
+        payload = json.load(f)
+
+    if isinstance(payload, dict):
+        records = payload.get("items") or payload.get("records") or []
+    elif isinstance(payload, list):
+        records = payload
+    else:
+        raise ValueError("predictions_file 需要是 JSON 数组或包含 items/records 的对象")
+
+    eval_res = _evaluate_prediction_records(records, prediction_field="generated_answer")
+    overall = eval_res["overall"]
+    items = eval_res["items"]
+
+    os.makedirs(output_dir, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    detailed_file = os.path.join(output_dir, f"{output_prefix}_detailed_{timestamp}.json")
+    summary_file = os.path.join(output_dir, f"{output_prefix}_summary_{timestamp}.json")
+
+    summary = {
+        "predictions_file": predictions_file,
+        "EM": overall.get("EM", 0.0),
+        "F1": overall.get("F1", 0.0),
+        "Count": overall.get("Count", 0),
+        "detailed_file": detailed_file,
+    }
+
+    with open(detailed_file, "w", encoding="utf-8") as f:
+        json.dump({"overall_metrics": summary, "items": items}, f, ensure_ascii=False, indent=2)
+    with open(summary_file, "w", encoding="utf-8") as f:
+        json.dump(summary, f, ensure_ascii=False, indent=2)
+
+    print("\n" + "=" * 60)
+    print("📊 已完成生成结果评估")
+    print(f"🔹 Count: {summary['Count']}")
+    print(f"🔹 EM: {summary['EM']:.2f}%")
+    print(f"🔹 F1: {summary['F1']:.2f}%")
+    print(f"🔹 摘要文件: {summary_file}")
+    print("=" * 60 + "\n")
+
+    return summary
+
+
 def load_offline_qa_data(offline_file: str, sample_size: int = 0, shuffle: bool = False) -> List[Dict[str, Any]]:
     """加载离线检索结果文件（如 data/test_knowledge.json）。"""
     with open(offline_file, "r", encoding="utf-8") as f:
@@ -303,7 +511,7 @@ def run_offline_generation_and_evaluation(
     generator,
     offline_file: str,
     sample_size: int = 50,
-    output_dir: str = "results",
+    output_dir: str = DEFAULT_GENERATION_OUTPUT_DIR,
     output_prefix: str = "offline_test_knowledge",
     max_tokens: Optional[int] = None,
     temperature: Optional[float] = None,

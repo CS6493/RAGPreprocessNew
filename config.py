@@ -2,7 +2,7 @@ import os
 import torch
 
 # ===================== 全局环境配置 =====================
-os.environ["HF_HOME"] = "/root/autodl-tmp/hf_cache"
+os.environ["HF_HOME"] = os.path.expanduser("~/.cache/huggingface")
 os.environ["TQDM_DISABLE_HTML"] = "1"
 os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
 
@@ -16,6 +16,10 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 # ===================== 默认路径 =====================
 DEFAULT_OUTPUT_DIR = "./rag_output"
+DEFAULT_RETRIEVE_QUERY_FILE = "./data/queries.json"
+DEFAULT_RETRIEVE_OUTPUT_DIR = "./retrieve_output"
+DEFAULT_GENERATION_OUTPUT_DIR = "./generation_output"
+DEFAULT_OFFLINE_KNOWLEDGE_FILE = "./data/test_knowledge.json"
 
 # ===================== 数据集配置 =====================
 DATASETS_CONFIG = {
