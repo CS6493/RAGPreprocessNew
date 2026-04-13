@@ -111,8 +111,12 @@ def load_and_preprocess_dataset(dataset_name, max_samples=1000):
             
     elif dataset_name == "Natural_Questions":
         for item in tqdm(ds, desc=desc):
-            txt = f"{item.get('query', '')} {item.get('answer', '')}"
-            docs.append(clean_text(txt))
+            # NQ 仅有 query/answer 字段时，避免将 query 与 answer 拼接进同一检索上下文。
+            # 优先使用 answer 作为文档内容，若 answer 为空再回退 query，保证分块和索引可执行。
+            answer_text = str(item.get("answer", "") or "").strip()
+            query_text = str(item.get("query", "") or "").strip()
+            context_text = answer_text if answer_text else ""
+            docs.append(clean_text(context_text))
             meta.append({
                 "dataset": dataset_name,
                 "query": item.get("query", "unknown"),
