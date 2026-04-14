@@ -20,7 +20,7 @@ st.title("🤖 端到端 RAG 系统可视化平台")
 # 2. 全局状态缓存与初始化 (避免每次点击重新加载模型)
 # ==========================================
 @st.cache_resource(show_spinner=False)
-def load_rag_system(dataset_name, method, top_k, gen_model, use_api):
+def load_rag_system(dataset_name, method, top_k, use_api, api_provider, local_gen_model):
     current_dir = os.path.dirname(os.path.abspath(__file__))
     abs_output_dir = os.path.join(current_dir, "rag_output")
     paths = get_file_paths(abs_output_dir, dataset_name, "train", 512, 50)
@@ -32,22 +32,16 @@ def load_rag_system(dataset_name, method, top_k, gen_model, use_api):
         chunk_size=512
     )
     
-    # 👇 修改部分 👇
     api_key = None
     api_base_url = None
-    actual_model_name = gen_model # 默认使用 UI 传过来的名字（针对本地模型）
+    actual_model_name = local_gen_model
     
     if use_api:
-        if "deepseek" in gen_model.lower():
-            api_key = API_CONFIG["DeepSeek"]["api_key"]
-            api_base_url = API_CONFIG["DeepSeek"]["base_url"]
-            # 🌟 强制将请求模型名替换为 config.py 中配置的真实名称 (deepseek-chat)
-            actual_model_name = API_CONFIG["DeepSeek"]["model"] 
-        else:
-            api_key = API_CONFIG["Qwen"]["api_key"]
-            api_base_url = API_CONFIG["Qwen"]["base_url"]
-            # 🌟 强制将请求模型名替换为 config.py 中配置的真实名称 (qwen-plus)
-            actual_model_name = API_CONFIG["Qwen"]["model"]
+        api_cfg = API_CONFIG[api_provider]
+        api_key = api_cfg["api_key"]
+        api_base_url = api_cfg["base_url"]
+        # 强制使用服务商配置里的真实模型名，避免 UI 传入本地模型名污染 API 请求
+        actual_model_name = api_cfg["model"]
 
     generator = RAGGenerator(
         model_name=actual_model_name, # 🌟 这里传入修正后的实际模型名
@@ -73,14 +67,27 @@ with st.sidebar:
     use_api = st.toggle("🌐 使用 API 模式", value=True)
     
     if use_api:
-        gen_model = st.selectbox("模型选择", ["Qwen", "DeepSeek"])
+        api_provider = st.selectbox("API 提供商", ["Qwen", "DeepSeek"])
+        local_gen_model = "Qwen/Qwen2.5-7B-Instruct"
     else:
-        gen_model = st.text_input("本地模型路径", "Qwen/Qwen2.5-7B-Instruct")
+        api_provider = "Qwen"
+        local_gen_model = st.selectbox(
+            "本地模型",
+            ["Qwen/Qwen2.5-7B", "Qwen/Qwen2.5-7B-Instruct"],
+            index=1,
+        )
 
 # 根据侧边栏配置加载核心组件
 with st.spinner("正在加载系统组件 (如果是首次加载本地模型可能需要较长时间)..."):
     try:
-        retriever, generator = load_rag_system(selected_dataset, selected_method, top_k, gen_model, use_api)
+        retriever, generator = load_rag_system(
+            selected_dataset,
+            selected_method,
+            top_k,
+            use_api,
+            api_provider,
+            local_gen_model,
+        )
         st.sidebar.success("✅ 系统加载完成！")
     except Exception as e:
         st.sidebar.error(f"加载失败，请确保您已经先运行了 offline pipeline 生成了索引！\n错误: {e}")

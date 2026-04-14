@@ -100,6 +100,21 @@ python main.py \
 	--do_factscore
 ```
 
+如果你想直接使用本地部署的 Qwen 模型，可以把上面的 API 参数替换成本地模型选择，例如：
+
+```bash
+python main.py \
+	--mode generate_retrieve \
+	--dataset HotpotQA \
+	--retrieval_input_file ./retrieve_output/retrieval_detailed_YYYYMMDD_HHMMSS.json \
+	--generation_output_dir ./generation_output \
+	--generation_output_prefix hotpot_local \
+	--local_gen_model Qwen/Qwen2.5-7B-Instruct \
+	--do_factscore
+```
+
+可选的本地模型只有两个：`Qwen/Qwen2.5-7B` 和 `Qwen/Qwen2.5-7B-Instruct`。
+
 说明：
 
 - 若不传 --retrieval_input_file，会自动选择 retrieve_output 下最新 retrieval_detailed 文件。

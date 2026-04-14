@@ -800,7 +800,14 @@ def _build_cli_args():
     parser.add_argument("--output_prefix", type=str, default="offline_test_knowledge", help="输出文件前缀")
 
     # 生成参数
-    parser.add_argument("--gen_model", type=str, default=None, help="生成模型（API 模式默认使用 config 中 provider 对应模型）")
+    parser.add_argument("--gen_model", type=str, default=None, help="API 模式下可选的模型名覆盖项")
+    parser.add_argument(
+        "--local_gen_model",
+        type=str,
+        default=None,
+        choices=["Qwen/Qwen2.5-7B", "Qwen/Qwen2.5-7B-Instruct"],
+        help="本地生成模型",
+    )
     parser.add_argument("--use_api", action="store_true", help="是否通过 API 调用模型（默认会自动启用 API）")
     parser.add_argument("--use_local", action="store_true", help="强制使用本地模型，不走 API")
     parser.add_argument("--api_provider", type=str, default=None, help="API 提供商名称，优先读取 config.API_CONFIG")
@@ -824,7 +831,7 @@ if __name__ == "__main__":
     args = _build_cli_args()
 
     from generator import RAGGenerator
-    from config import API_CONFIG, DEFAULT_API_PROVIDER, DEFAULT_GEN_MODEL
+    from config import API_CONFIG, DEFAULT_API_PROVIDER, DEFAULT_GEN_MODEL, DEFAULT_LOCAL_GEN_MODEL
 
     need_generator = args.mode in {"generate", "both", "evaluate"}
     generator = None
@@ -846,7 +853,7 @@ if __name__ == "__main__":
             resolved_api_base_url = resolved_api_base_url or cfg.get("base_url")
             print(f"[*] 使用 config API 提供商: {provider} | 模型: {resolved_model_name}")
         else:
-            resolved_model_name = resolved_model_name or DEFAULT_GEN_MODEL
+            resolved_model_name = args.local_gen_model or resolved_model_name or DEFAULT_LOCAL_GEN_MODEL
 
         generator = RAGGenerator(
             model_name=resolved_model_name,

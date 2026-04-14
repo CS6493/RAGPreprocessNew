@@ -30,6 +30,7 @@ class RAGGenerator:
         self.use_api = use_api
         self.max_tokens = max_tokens
         self.temperature = temperature
+        self.use_chat_template = "instruct" in self.model_name.lower()
         
         if self.use_api:
             if OpenAI is None:
@@ -156,19 +157,57 @@ class RAGGenerator:
             }
         ]
 
+    def build_plain_prompt(self, question: str, contexts: List[str]) -> str:
+        """为基础模型构建纯文本提示词，不依赖 chat template。"""
+        context_block = self.join_contexts(contexts)
+        qtype = self.detect_question_type(question)
+
+        if qtype == "yes_no":
+            answer_rule = "If the evidence supports yes/no, answer with exactly yes or no."
+        else:
+            answer_rule = "Return the shortest direct answer phrase, not a long explanation."
+
+        return (
+            "You are a careful question answering assistant. "
+            "Use only the retrieved evidence. Do not use outside knowledge. "
+            "If the evidence is insufficient, reply exactly: Insufficient evidence. "
+            f"{answer_rule}\n\n"
+            f"Question: {question}\n\n"
+            f"Retrieved evidence:\n{context_block}\n\n"
+            "Final answer:"
+        )
+
+    def render_local_prompt(self, question: str, contexts: List[str]):
+        """根据模型类型渲染本地推理输入。Instruct 模型优先使用 chat template。"""
+        messages = self.build_instruct_messages(question=question, contexts=contexts)
+        if self.use_chat_template and getattr(self.tokenizer, "chat_template", None):
+            return messages, self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        return messages, self.build_plain_prompt(question=question, contexts=contexts)
+
+    def messages_to_prompt(self, messages: List[Dict[str, str]]) -> str:
+        """将消息数组转换为适用于基础模型的纯文本提示词。"""
+        parts: List[str] = []
+        for message in messages:
+            role = str(message.get("role", "user")).strip().capitalize()
+            content = str(message.get("content", "")).strip()
+            if content:
+                parts.append(f"{role}: {content}")
+        parts.append("Assistant:")
+        return "\n\n".join(parts)
+
     # ================= 核心生成推断逻辑 (自动分发本地与API) =================
 
     def generate(self, question: str, contexts: List[str], max_tokens: int = None, temperature: float = None) -> str:
         """接收问题和相关文档列表，生成回答"""
-        max_tokens = max_tokens or self.max_tokens
-        temperature = temperature or self.temperature
+        max_tokens = self.max_tokens if max_tokens is None else max_tokens
+        temperature = self.temperature if temperature is None else temperature
 
-        messages = self.build_instruct_messages(question=question, contexts=contexts)
+        messages, prompt = self.render_local_prompt(question=question, contexts=contexts)
         
         if self.use_api:
             return self._generate_api(messages, max_tokens, temperature)
         else:
-            return self._generate_local(messages, max_tokens, temperature)
+            return self._generate_local(messages, prompt, max_tokens, temperature)
 
     def generate_from_knowledge(
         self,
@@ -200,10 +239,16 @@ class RAGGenerator:
             return f"API Error: {str(e)}"
 
     @torch.inference_mode()
-    def _generate_local(self, messages: List[Dict[str, str]], max_new_tokens: int, temperature: float) -> str:
+    def _generate_local(
+        self,
+        messages: List[Dict[str, str]],
+        prompt: Optional[str] = None,
+        max_new_tokens: int = 128,
+        temperature: float = 0.1,
+    ) -> str:
         """保持原有的基于 HuggingFace Transformers 的推理流程"""
-        # 使用模型的默认 chat 模板将格式转化为单段字符串提示词
-        prompt = self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        if prompt is None:
+            prompt = self.messages_to_prompt(messages)
         inputs = self.tokenizer(prompt, return_tensors="pt").to(self.model.device)
         
         gen_kwargs = {

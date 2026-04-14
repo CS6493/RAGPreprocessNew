@@ -3,6 +3,8 @@ import torch
 
 # ===================== 全局环境配置 =====================
 os.environ["HF_HOME"] = os.path.expanduser("~/.cache/huggingface")
+# os.environ["HF_HOME"] = "/root/autodl-tmp/hf_cache"
+
 os.environ["TQDM_DISABLE_HTML"] = "1"
 os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
 
@@ -49,6 +51,11 @@ DATASETS_CONFIG = {
 
 # ===================== 生成模型 (Generation) 默认参数 =====================
 DEFAULT_GEN_MODEL = "Qwen/Qwen2.5-7B-Instruct"
+DEFAULT_LOCAL_GEN_MODEL = "Qwen/Qwen2.5-7B-Instruct"
+LOCAL_GEN_MODEL_CHOICES = [
+    "Qwen/Qwen2.5-7B",
+    "Qwen/Qwen2.5-7B-Instruct",
+]
 DEFAULT_MAX_TOKENS = 128
 DEFAULT_TEMPERATURE = 0.1
 
@@ -63,7 +70,12 @@ API_CONFIG = {
         "api_key": "sk-fd297ac637d844feb60524a70dd8e368", # 替换为你的 Key
         "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
         "model": "qwen-plus" # 或 qwen-max
-    }
+    },
+    "Qwen2.5-7b-instruct": {
+        "api_key": "sk-fd297ac637d844feb60524a70dd8e368", # 替换为你的 Key
+        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "model": "qwen2.5-7b-instruct"
+    }   
 }
 
 # 默认生成模型选择

@@ -10,6 +10,7 @@ from config import (
     DEFAULT_CHUNK_OVERLAP,
     DEFAULT_CHUNK_SIZE,
     DEFAULT_GEN_MODEL,
+    DEFAULT_LOCAL_GEN_MODEL,
     DEFAULT_MAX_TOKENS,
     DEFAULT_MODEL_NAME,
     DEFAULT_OFFLINE_KNOWLEDGE_FILE,
@@ -19,6 +20,7 @@ from config import (
     DEFAULT_RETRIEVE_QUERY_FILE,
     DEFAULT_TEMPERATURE,
     DEFAULT_GENERATION_OUTPUT_DIR,
+    LOCAL_GEN_MODEL_CHOICES,
     get_file_paths,
 )
 from data_loader import load_and_preprocess_dataset
@@ -77,7 +79,14 @@ def parse_args():
     retrieve_io.add_argument("--retrieval_input_file", type=str, default=None, help="用于生成阶段的检索结果文件")
 
     generation = parser.add_argument_group("生成配置")
-    generation.add_argument("--gen_model", type=str, default=DEFAULT_GEN_MODEL)
+    generation.add_argument("--gen_model", type=str, default=None, help="API 模式下可选的模型名覆盖项")
+    generation.add_argument(
+        "--local_gen_model",
+        type=str,
+        default=None,
+        choices=LOCAL_GEN_MODEL_CHOICES,
+        help="本地生成模型",
+    )
     generation.add_argument("--use_api", action="store_true")
     generation.add_argument("--use_local", action="store_true", help="强制使用本地模型")
     generation.add_argument("--api_provider", type=str, default=DEFAULT_API_PROVIDER, choices=list(API_CONFIG.keys()))
@@ -132,7 +141,7 @@ def build_generator(args):
 
     if resolved_use_api:
         provider_cfg = API_CONFIG[args.api_provider]
-        model_name = provider_cfg.get("model", args.gen_model)
+        model_name = args.gen_model or provider_cfg.get("model", DEFAULT_GEN_MODEL)
         api_key = args.api_key or provider_cfg.get("api_key")
         api_base_url = args.api_base_url or provider_cfg.get("base_url")
         return RAGGenerator(
@@ -145,7 +154,7 @@ def build_generator(args):
         )
 
     return RAGGenerator(
-        model_name=args.gen_model,
+        model_name=args.local_gen_model or args.gen_model or DEFAULT_LOCAL_GEN_MODEL,
         use_api=False,
         use_4bit=args.use_4bit,
         max_tokens=args.max_tokens,
