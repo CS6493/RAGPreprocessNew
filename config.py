@@ -78,6 +78,19 @@ API_CONFIG = {
     }   
 }
 
+# ===================== 本地 vLLM 服务配置 =====================
+# 用于快速连接本地部署的 vLLM 服务
+VLLM_LOCAL_CONFIG = {
+    "Qwen/Qwen2.5-7B": {
+        "base_url": "http://127.0.0.1:8000/v1",
+        "api_key": "EMPTY"
+    },
+    "Qwen/Qwen2.5-7B-Instruct": {
+        "base_url": "http://127.0.0.1:8001/v1",
+        "api_key": "EMPTY"
+    }
+}
+
 # 默认生成模型选择
 DEFAULT_API_PROVIDER = "DeepSeek"
 

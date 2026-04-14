@@ -21,6 +21,7 @@ from config import (
     DEFAULT_TEMPERATURE,
     DEFAULT_GENERATION_OUTPUT_DIR,
     LOCAL_GEN_MODEL_CHOICES,
+    VLLM_LOCAL_CONFIG,
     get_file_paths,
 )
 from data_loader import load_and_preprocess_dataset
@@ -87,8 +88,10 @@ def parse_args():
         choices=LOCAL_GEN_MODEL_CHOICES,
         help="本地生成模型",
     )
-    generation.add_argument("--use_api", action="store_true")
-    generation.add_argument("--use_local", action="store_true", help="强制使用本地模型")
+    generation.add_argument("--use_api", action="store_true", help="使用 API 调用")
+    generation.add_argument("--use_vllm", type=str, default=None, choices=LOCAL_GEN_MODEL_CHOICES, 
+                          help="使用本地 vLLM 服务 (快捷方式，自动配置 api_base_url 和 api_key)")
+    generation.add_argument("--use_local", action="store_true", help="强制使用本地权重加载")
     generation.add_argument("--api_provider", type=str, default=DEFAULT_API_PROVIDER, choices=list(API_CONFIG.keys()))
     generation.add_argument("--api_key", type=str, default=None)
     generation.add_argument("--api_base_url", type=str, default=None)
@@ -137,13 +140,30 @@ def build_retriever(args, paths):
 
 
 def build_generator(args):
-    resolved_use_api = (not args.use_local) and (args.use_api or args.api_key is not None)
+    # 优先级：use_vllm > use_api > use_local
+    
+    # 1. 如果指定了 --use_vllm，使用本地 vLLM 快捷模式
+    if args.use_vllm:
+        vllm_cfg = VLLM_LOCAL_CONFIG[args.use_vllm]
+        print(f"[*] 使用本地 vLLM 服务: {args.use_vllm} (base_url: {vllm_cfg['base_url']})")
+        return RAGGenerator(
+            model_name=args.use_vllm,
+            use_api=True,
+            api_key=vllm_cfg["api_key"],
+            api_base_url=vllm_cfg["base_url"],
+            max_tokens=args.max_tokens,
+            temperature=args.temperature,
+        )
+    
+    # 2. 如果指定了 --use_api 或 --api_key，使用 API 模式
+    resolved_use_api = (not args.use_local) and (args.use_api or args.api_key is not None or args.api_base_url is not None)
 
     if resolved_use_api:
-        provider_cfg = API_CONFIG[args.api_provider]
+        provider_cfg = API_CONFIG.get(args.api_provider, {})
         model_name = args.gen_model or provider_cfg.get("model", DEFAULT_GEN_MODEL)
         api_key = args.api_key or provider_cfg.get("api_key")
         api_base_url = args.api_base_url or provider_cfg.get("base_url")
+        print(f"[*] 使用 API 模式: {model_name} (base_url: {api_base_url})")
         return RAGGenerator(
             model_name=model_name,
             use_api=True,
@@ -153,8 +173,11 @@ def build_generator(args):
             temperature=args.temperature,
         )
 
+    # 3. 否则使用本地权重加载
+    model_name = args.local_gen_model or args.gen_model or DEFAULT_LOCAL_GEN_MODEL
+    print(f"[*] 使用本地权重加载: {model_name}")
     return RAGGenerator(
-        model_name=args.local_gen_model or args.gen_model or DEFAULT_LOCAL_GEN_MODEL,
+        model_name=model_name,
         use_api=False,
         use_4bit=args.use_4bit,
         max_tokens=args.max_tokens,

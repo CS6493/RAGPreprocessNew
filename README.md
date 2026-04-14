@@ -74,6 +74,53 @@ curl http://127.0.0.1:8000/v1/models
 curl http://127.0.0.1:8001/v1/models
 ```
 
+### 3.4 快速启动脚本
+
+为了方便起见，提供了启动脚本 `launch_vllm_local.sh`：
+
+```bash
+# 启动两个模型（后台运行）
+bash launch_vllm_local.sh both
+
+# 只启动 base 模型
+bash launch_vllm_local.sh base
+
+# 只启动 instruct 模型
+bash launch_vllm_local.sh instruct
+```
+
+### 3.5 使用 vLLM 服务进行生成
+
+vLLM 服务启动后，你可以通过新增的 `--use_vllm` 参数轻松调用本地部署的模型。这是最便捷的方式（自动配置 API endpoint）：
+
+```bash
+# 使用 base 模型
+python main.py \
+	--mode generate_retrieve \
+	--dataset HotpotQA \
+	--retrieval_input_file ./retrieve_output/retrieval_detailed_YYYYMMDD_HHMMSS.json \
+	--generation_output_dir ./generation_output \
+	--generation_output_prefix hotpot_vllm_base \
+	--use_vllm "Qwen/Qwen2.5-7B" \
+	--max_tokens 128 \
+	--temperature 0.1
+```
+
+```bash
+# 使用 instruct 模型
+python main.py \
+	--mode generate_retrieve \
+	--dataset HotpotQA \
+	--retrieval_input_file ./retrieve_output/retrieval_detailed_YYYYMMDD_HHMMSS.json \
+	--generation_output_dir ./generation_output \
+	--generation_output_prefix hotpot_vllm_instruct \
+	--use_vllm "Qwen/Qwen2.5-7B-Instruct" \
+	--max_tokens 128 \
+	--temperature 0.1
+```
+
+更详细的部署与优化说明，请参考 [VLLM_DEPLOYMENT.md](VLLM_DEPLOYMENT.md)。
+
 ## 4. 统一入口模式
 
 主入口：main.py
@@ -97,7 +144,7 @@ python main.py --help
 
 ## 5. HotpotQA 常用命令
 
-### 4.1 首次构建索引（若已有 rag_output 可跳过）
+### 5.1 首次构建索引（若已有 rag_output 可跳过）
 
 ```bash
 python main.py \
@@ -109,7 +156,7 @@ python main.py \
 	--batch_size 8
 ```
 
-### 4.2 批量检索（读取 data/queries.json，输出到 retrieve_output）
+### 5.2 批量检索（读取 data/queries.json，输出到 retrieve_output）
 
 ```bash
 python main.py \
@@ -133,7 +180,7 @@ python main.py \
 - top1_em
 - top1_f1
 
-### 4.3 基于检索结果做生成与评估（我们的流程）
+### 5.3 基于检索结果做生成与评估（我们的流程）
 
 ```bash
 python main.py \
@@ -199,7 +246,7 @@ python main.py \
 - 若不传 --retrieval_input_file，会自动选择 retrieve_output 下最新 retrieval_detailed 文件。
 - 输出中包含 question、answer、generated_answer、knowledge_used、retrieved_results、EM/F1/FActScore。
 
-### 4.4 只评估已有生成结果
+### 5.4 只评估已有生成结果
 
 ```bash
 python main.py \
@@ -208,7 +255,7 @@ python main.py \
 	--generation_output_dir ./generation_output
 ```
 
-### 4.5 第三方检索结果流程（不影响我们的检索流程）
+### 5.5 第三方检索结果流程（不影响我们的检索流程）
 
 ```bash
 python main.py \
@@ -228,7 +275,7 @@ offline_mode 可选：
 - evaluate: 只评估
 - both: 生成 + 评估
 
-### 4.6 一条命令串行执行我们的检索+生成
+### 5.6 一条命令串行执行我们的检索+生成
 
 ```bash
 python main.py \
@@ -266,9 +313,10 @@ streamlit run app.py
 
 ## 8. 常见问题
 
-### 7.1 没有输出到目标文件
+	### 8.1 没有输出到目标文件
 
 请确认：
+	### 8.2 使用 API 生成时报错
 
 - mode 是否正确（例如 retrieve 才会写 retrieve_output）
 - 输入文件后缀是否正确（.json 不是 .jon）
@@ -277,6 +325,7 @@ streamlit run app.py
 ### 7.2 使用 API 生成时报错
 
 请检查：
+	### 8.3 跳过 pipeline 后检索器初始化失败
 
 - --use_api / --api_provider 参数
 - config.py 中 API 配置
