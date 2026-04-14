@@ -1,33 +1,45 @@
 import json
-import random
 
-# 1. 加载文件
-file_path = './rag_output/HotpotQA/HotpotQA_train_cs512_co50_meta.json'
-with open(file_path, 'r', encoding='utf-8') as f:
-    data = json.load(f)
+# 定义文件名
+input_file = './rag_output/FinanceBench/FinanceBench_train_cs512_co50_meta.json'
+output_file = './data/financebench_queries_50.json'
 
-# 2. 使用字典进行去重
-# 我们以 question 作为键，这样即使同一个问题出现在 10 个 chunk 里，也只会被记录一次
-unique_qa_dict = {}
+def extract_unique_qa(limit=50):
+    try:
+        # 1. 读取原始 JSON 文件
+        with open(input_file, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        
+        extracted_data = []
+        seen_questions = set()  # 用于记录已经提取过的问题内容
+        
+        # 2. 遍历并去重提取
+        for item in data:
+            # 如果已经提取够了，直接跳出循环
+            if len(extracted_data) >= limit:
+                break
+                
+            question = item.get("question")
+            answer = item.get("answer")
+            
+            # 只有当 question 不在集合中时，才进行提取
+            if question not in seen_questions:
+                extracted_data.append({
+                    "question": question,
+                    "answer": answer
+                })
+                seen_questions.add(question) # 将问题加入“已见”集合
+        
+        # 3. 保存结果
+        with open(output_file, 'w', encoding='utf-8') as f:
+            json.dump(extracted_data, f, ensure_ascii=False, indent=4)
+            
+        print(f"提取完成！共提取了 {len(extracted_data)} 个唯一问题，已保存至 {output_file}")
 
-for item in data:
-    q = item.get("question")
-    a = item.get("answer")
-    if q and a:
-        # 如果问题不在字典中，则添加
-        if q not in unique_qa_dict:
-            unique_qa_dict[q] = a
+    except FileNotFoundError:
+        print(f"错误：找不到文件 {input_file}")
+    except json.JSONDecodeError:
+        print("错误：JSON 格式不正确")
 
-# 3. 将去重后的结果转回列表格式
-all_unique_pairs = [{"question": q, "answer": a} for q, a in unique_qa_dict.items()]
-
-print(f"总 chunk 数: {len(data)}")
-print(f"去重后的唯一问题数: {len(all_unique_pairs)}")
-
-# 4. 随机抽取 100 个
-sample_size = min(len(all_unique_pairs), 100)
-sampled_qa = random.sample(all_unique_pairs, sample_size)
-
-# 5. 按照要求的格式输出
-for qa in sampled_qa:
-    print(json.dumps(qa, ensure_ascii=False))
+if __name__ == "__main__":
+    extract_unique_qa(50)
