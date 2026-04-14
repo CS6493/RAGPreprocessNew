@@ -98,7 +98,12 @@ def parse_args():
     generation.add_argument("--max_tokens", type=int, default=DEFAULT_MAX_TOKENS)
     generation.add_argument("--temperature", type=float, default=DEFAULT_TEMPERATURE)
     generation.add_argument("--use_4bit", action="store_true")
-    generation.add_argument("--do_factscore", action="store_true")
+    generation.add_argument(
+        "--do_factscore",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="是否计算 FActScore（默认开启，可用 --no-do_factscore 关闭）",
+    )
     generation.add_argument("--generation_output_dir", type=str, default=DEFAULT_GENERATION_OUTPUT_DIR)
     generation.add_argument("--generation_output_prefix", type=str, default="our_pipeline")
 

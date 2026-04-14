@@ -102,6 +102,7 @@ python main.py \
 	--generation_output_dir ./generation_output \
 	--generation_output_prefix hotpot_vllm_base \
 	--use_vllm "Qwen/Qwen2.5-7B" \
+	--do_factscore \
 	--max_tokens 128 \
 	--temperature 0.1
 ```
@@ -115,11 +116,14 @@ python main.py \
 	--generation_output_dir ./generation_output \
 	--generation_output_prefix hotpot_vllm_instruct \
 	--use_vllm "Qwen/Qwen2.5-7B-Instruct" \
+	--do_factscore \
 	--max_tokens 128 \
 	--temperature 0.1
 ```
 
 更详细的部署与优化说明，请参考 [VLLM_DEPLOYMENT.md](VLLM_DEPLOYMENT.md)。
+
+说明：当前版本默认会计算 FActScore；如需关闭可传 `--no-do_factscore`。
 
 ## 4. 统一入口模式
 
