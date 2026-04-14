@@ -9,4 +9,4 @@ tqdm
 langchain-text-splitters
 numpy
 torchvision
-
+vllm
