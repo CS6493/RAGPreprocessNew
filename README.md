@@ -27,7 +27,54 @@ conda activate cs6493rag
 pip install -r requirements.txt
 ```
 
-## 3. 统一入口模式
+如果你要用 vLLM 在本地部署 Qwen 模型，额外建议安装：
+
+```bash
+pip install vllm
+```
+
+如果需要更高吞吐，建议根据你的显存情况开启张量并行和较大的 `max-model-len`。
+
+## 3. 使用 vLLM 本地部署
+
+vLLM 会启动一个 OpenAI-compatible 服务。下面分别给出 Qwen/Qwen2.5-7B 和 Qwen/Qwen2.5-7B-Instruct 的部署方式。
+
+### 3.1 部署 Qwen/Qwen2.5-7B
+
+```bash
+python -m vllm.entrypoints.openai.api_server \
+	--model Qwen/Qwen2.5-7B \
+	--served-model-name Qwen/Qwen2.5-7B \
+	--host 0.0.0.0 \
+	--port 8000 \
+	--max-model-len 4096
+```
+
+这个模型走的是 `/v1/completions`，适合你项目里当前已经兼容的 base model 调用方式。
+
+### 3.2 部署 Qwen/Qwen2.5-7B-Instruct
+
+```bash
+python -m vllm.entrypoints.openai.api_server \
+	--model Qwen/Qwen2.5-7B-Instruct \
+	--served-model-name Qwen/Qwen2.5-7B-Instruct \
+	--host 0.0.0.0 \
+	--port 8001 \
+	--max-model-len 4096
+```
+
+这个模型走的是 `/v1/chat/completions`，适合指令模型的 chat 方式调用。
+
+### 3.3 服务启动后如何检查
+
+可以先用 curl 做一个最小检查：
+
+```bash
+curl http://127.0.0.1:8000/v1/models
+curl http://127.0.0.1:8001/v1/models
+```
+
+## 4. 统一入口模式
 
 主入口：main.py
 
@@ -48,7 +95,7 @@ pip install -r requirements.txt
 python main.py --help
 ```
 
-## 4. HotpotQA 常用命令
+## 5. HotpotQA 常用命令
 
 ### 4.1 首次构建索引（若已有 rag_output 可跳过）
 
@@ -115,6 +162,38 @@ python main.py \
 
 可选的本地模型只有两个：`Qwen/Qwen2.5-7B` 和 `Qwen/Qwen2.5-7B-Instruct`。
 
+如果你使用的是 vLLM 本地服务，调用例子如下：
+
+```bash
+python main.py \
+	--mode generate_retrieve \
+	--dataset HotpotQA \
+	--retrieval_input_file ./retrieve_output/retrieval_detailed_YYYYMMDD_HHMMSS.json \
+	--generation_output_dir ./generation_output \
+	--generation_output_prefix hotpot_vllm_base \
+	--use_api \
+	--gen_model Qwen/Qwen2.5-7B \
+	--api_base_url http://127.0.0.1:8000/v1 \
+	--api_key EMPTY \
+	--max_tokens 128 \
+	--temperature 0.1
+```
+
+```bash
+python main.py \
+	--mode generate_retrieve \
+	--dataset HotpotQA \
+	--retrieval_input_file ./retrieve_output/retrieval_detailed_YYYYMMDD_HHMMSS.json \
+	--generation_output_dir ./generation_output \
+	--generation_output_prefix hotpot_vllm_instruct \
+	--use_api \
+	--gen_model Qwen/Qwen2.5-7B-Instruct \
+	--api_base_url http://127.0.0.1:8001/v1 \
+	--api_key EMPTY \
+	--max_tokens 128 \
+	--temperature 0.1
+```
+
 说明：
 
 - 若不传 --retrieval_input_file，会自动选择 retrieve_output 下最新 retrieval_detailed 文件。
@@ -164,7 +243,7 @@ python main.py \
 	--do_factscore
 ```
 
-## 5. 检索模块单独执行
+## 6. 检索模块单独执行
 
 可独立运行 retriever.py（不通过 main.py）：
 
@@ -177,7 +256,7 @@ python retriever.py \
 	--top_k 3
 ```
 
-## 6. UI 启动
+## 7. UI 启动
 
 ```bash
 streamlit run app.py
@@ -185,7 +264,7 @@ streamlit run app.py
 
 建议先确保对应数据集索引已存在于 rag_output。
 
-## 7. 常见问题
+## 8. 常见问题
 
 ### 7.1 没有输出到目标文件
 

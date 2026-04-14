@@ -228,6 +228,18 @@ class RAGGenerator:
 
     def _generate_api(self, messages, max_tokens, temperature) -> str:
         try:
+            # 本地部署的 Qwen2.5-7B（非 Instruct）使用 /v1/completions，输入单字符串 prompt。
+            normalized_name = str(self.model_name).strip().lower()
+            if normalized_name in {"qwen/qwen2.5-7b", "qwen2.5-7b", "qwen-2.5-7b"}:
+                prompt = self.messages_to_prompt(messages)
+                response = self.client.completions.create(
+                    model=self.model_name,
+                    prompt=prompt,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                )
+                return str(response.choices[0].text).strip()
+
             response = self.client.chat.completions.create(
                 model=self.model_name,
                 messages=messages,
